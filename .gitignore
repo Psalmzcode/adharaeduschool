@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js / frontend
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/.vercel/
+
+# Backend / Node
+backend/backend/dist/
+backend/backend/coverage/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# OS & editors
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs & debug
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Prisma (keep schema & migrations; ignore local DB if any)
+*.db
+*.db-journal
+
+# Misc
+*.pem
+.turbo

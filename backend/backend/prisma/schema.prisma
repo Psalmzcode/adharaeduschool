@@ -1,0 +1,927 @@
+// AdharaEdu Prisma Schema
+// PostgreSQL + Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+  TUTOR
+  STUDENT
+  PARENT
+}
+
+enum TrackLevel {
+  TRACK_1  // JSS1-SS1: Computer Appreciation
+  TRACK_2  // SS1-SS2: Intro to Programming
+  TRACK_3  // SS3: Advanced Tech Skills
+}
+
+enum SchoolStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+  REJECTED
+}
+
+/// Institution type (for onboarding / compliance)
+enum SchoolType {
+  NURSERY_PRIMARY
+  PRIMARY
+  SECONDARY
+  MIXED
+  OTHER
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum ModuleStatus {
+  LOCKED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+enum AssignmentStatus {
+  PENDING
+  SUBMITTED
+  GRADED
+}
+
+enum ExamStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum NoticeType {
+  URGENT
+  IMPORTANT
+  INFO
+}
+
+enum ReportStatus {
+  DRAFT
+  SUBMITTED
+  REVIEWED
+}
+
+enum TutorOnboardingStatus {
+  DRAFT // Profile / KYC not finished — limited API access
+  COMPLETE
+}
+
+enum TutorIdentificationType {
+  NIN
+  VOTERS_CARD
+  DRIVERS_LICENSE
+  INTERNATIONAL_PASSPORT
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  role          Role
+  firstName     String
+  lastName      String
+  phone         String?
+  avatarUrl     String?   // Cloudinary URL
+  /// Email / push-style alerts (used when notification channels are wired)
+  notifyNewMessage      Boolean @default(true)
+  notifyReportDeadline  Boolean @default(true)
+  notifyExamResults     Boolean @default(false)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  school        School?   @relation("SchoolAdmin", fields: [schoolId], references: [id])
+  schoolId      String?
+  tutorProfile  Tutor?
+  studentProfile Student?
+  parentProfile  Parent?
+  notifications Notification[]
+  sessions      Session[]
+
+  tutorConversations   Conversation[] @relation("TutorConversations")
+  tutorSessions        SessionLog[]   @relation("TutorSessions")
+  tutorClassAssignments ClassAssignment[] @relation("TutorAssignments")
+  lessonPlans          LessonPlan[]   @relation("TutorLessonPlans")
+  studentConversations Conversation[] @relation("StudentConversations")
+  sentMessages         Message[]      @relation("SentMessages")
+  peerMessagesSent     PeerMessage[]  @relation("PeerMessageSender")
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// ─────────────────────────────────────────────
+// SCHOOL
+// ─────────────────────────────────────────────
+
+model School {
+  id              String        @id @default(cuid())
+  name            String
+  /// Legal / CAC name (may match `name`)
+  officialName    String?
+  schoolType      SchoolType?
+  code            String        @unique  // e.g. CHR
+  address         String
+  state           String
+  lga             String
+  website         String?
+  officialEmail   String?
+  officialPhone   String?
+  principalName   String
+  principalPhone  String
+  ictContactName  String?
+  ictContactPhone String?
+  ictContactEmail String?
+  billingContactName  String?
+  billingContactEmail String?
+  billingContactPhone String?
+  /// Class levels offered on Adhara (e.g. JSS1, SS2) — free-form checklist
+  platformLevels  String[]      @default([])
+  logoUrl         String?       // Cloudinary
+  status          SchoolStatus  @default(PENDING)
+  enrolledTracks  TrackLevel[]
+  currentTermLabel   String?
+  academicYearLabel  String?
+  studentCountBand   String?
+  streamsCount       Int?
+  /// Internal: tutor visits / site access (not shown to students by default)
+  visitDeploymentNotes String?
+  timezone        String        @default("Africa/Lagos")
+  locale          String        @default("en-NG")
+  /// Set when school admin finishes post-approval onboarding (required before full dashboard)
+  profileCompletedAt DateTime?
+  totalStudents   Int           @default(0)
+  feesPerStudent  Float         @default(0)
+  contractStart   DateTime?
+  contractEnd     DateTime?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  admins          User[]        @relation("SchoolAdmin")
+  students        Student[]
+  tutorAssignments TutorAssignment[]
+  notices         Notice[]
+  exams           Exam[]
+  reports         WeeklyReport[]
+  payments        Payment[]
+
+  sessionLogs         SessionLog[]
+  payrolls            TutorPayroll[]
+  examSchedules       ExamSchedule[]
+  classAssignments    ClassAssignment[]
+  peerConversations   PeerConversation[]
+
+  @@map("schools")
+}
+
+// ─────────────────────────────────────────────
+// TUTOR
+// ─────────────────────────────────────────────
+
+model Tutor {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  bio             String?
+  specializations String[]  // e.g. ["Python", "HTML/CSS"]
+  tracks          TrackLevel[]
+  rating          Float     @default(0)
+  totalClasses    Int       @default(0)
+  isVerified      Boolean   @default(false)
+  bankName        String?
+  bankAccount     String?
+  /// New tutors start DRAFT from API; existing rows default COMPLETE via migration
+  onboardingStatus TutorOnboardingStatus @default(COMPLETE)
+  passportPhotoUrl String?
+  identificationType TutorIdentificationType?
+  identificationNumber String?
+  identificationDocumentUrl String?
+  signatureUrl    String?
+  guarantors      Json?     // [{ fullName, phone, email, address, relationship? }, ...]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments     TutorAssignment[]
+  reports         WeeklyReport[]
+  cbtExams        CBTExam[]
+
+  payrolls  TutorPayroll[]
+
+  @@map("tutors")
+}
+
+model TutorAssignment {
+  id          String    @id @default(cuid())
+  tutorId     String
+  schoolId    String
+  track       TrackLevel
+  className   String    // e.g. "SS3A"
+  termLabel   String    // e.g. "2025/2026 Term 2"
+  /// Target teaching sessions per week for this class (delivered vs expected reports)
+  expectedSessionsPerWeek Int @default(3)
+  isActive    Boolean   @default(true)
+  startDate   DateTime
+  endDate     DateTime?
+  createdAt   DateTime  @default(now())
+
+  tutor       Tutor     @relation(fields: [tutorId], references: [id])
+  school      School    @relation(fields: [schoolId], references: [id])
+  sessionLogs SessionLog[]
+
+  @@map("tutor_assignments")
+}
+
+
+// ─────────────────────────────────────────────
+// STUDENT
+// ─────────────────────────────────────────────
+
+model Student {
+  id            String      @id @default(cuid())
+  userId        String      @unique
+  regNumber     String      @unique  // e.g. CHR/2024/SS3A/021
+  schoolId      String
+  className     String      // e.g. SS3A
+  track         TrackLevel
+  termLabel     String
+  parentId      String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school        School      @relation(fields: [schoolId], references: [id])
+  parent        Parent?     @relation(fields: [parentId], references: [id])
+  moduleProgress ModuleProgress[]
+  attendanceRecords Attendance[]
+  examAttempts  ExamAttempt[]
+  submissions   AssignmentSubmission[]
+
+  certificates        Certificate[]
+  assignmentSubs      ClassAssignmentSubmission[] @relation("StudentAssignmentSubmissions")
+
+  @@map("students")
+}
+
+// ─────────────────────────────────────────────
+// PARENT
+// ─────────────────────────────────────────────
+
+model Parent {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  notifyBySMS      Boolean @default(true)
+  notifyByWhatsApp Boolean @default(true)
+  notifyByEmail    Boolean @default(false)
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  children  Student[]
+
+  @@map("parents")
+}
+
+// ─────────────────────────────────────────────
+// MODULE / CURRICULUM
+// ─────────────────────────────────────────────
+
+model Module {
+  id          String      @id @default(cuid())
+  track       TrackLevel
+  number      Int         // Module 1, 2, 3...
+  title       String
+  description String
+  objectives  String[]
+  durationWeeks Int       @default(2)
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+
+  progress    ModuleProgress[]
+  exams       Exam[]
+  assignments Assignment[]
+  lessonPlans LessonPlan[]
+  cbtExams    CBTExam[]
+  practicalTasks PracticalTask[]
+  sessionLogs SessionLog[]
+
+  @@unique([track, number])
+  @@map("modules")
+}
+
+model ModuleProgress {
+  id          String        @id @default(cuid())
+  studentId   String
+  moduleId    String
+  status      ModuleStatus  @default(LOCKED)
+  score       Float?
+  completedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  student     Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  module      Module        @relation(fields: [moduleId], references: [id])
+
+  @@unique([studentId, moduleId])
+  @@map("module_progress")
+}
+
+// ─────────────────────────────────────────────
+// ATTENDANCE
+// ─────────────────────────────────────────────
+
+model Attendance {
+  id          String            @id @default(cuid())
+  studentId   String
+  date        DateTime          @db.Date
+  status      AttendanceStatus  @default(PRESENT)
+  notes       String?
+  markedBy    String?           // tutorId
+  createdAt   DateTime          @default(now())
+
+  student     Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, date])
+  @@map("attendance")
+}
+
+// ─────────────────────────────────────────────
+// ASSIGNMENT
+// ─────────────────────────────────────────────
+
+model Assignment {
+  id          String    @id @default(cuid())
+  moduleId    String
+  title       String
+  description String
+  dueDate     DateTime
+  attachmentUrl String? // Cloudinary
+  createdAt   DateTime  @default(now())
+
+  module      Module    @relation(fields: [moduleId], references: [id])
+  submissions AssignmentSubmission[]
+
+  @@map("assignments")
+}
+
+model AssignmentSubmission {
+  id            String            @id @default(cuid())
+  assignmentId  String
+  studentId     String
+  status        AssignmentStatus  @default(SUBMITTED)
+  fileUrl       String?           // Cloudinary
+  notes         String?
+  grade         Float?
+  feedback      String?
+  submittedAt   DateTime          @default(now())
+  gradedAt      DateTime?
+
+  assignment    Assignment        @relation(fields: [assignmentId], references: [id])
+  student       Student           @relation(fields: [studentId], references: [id])
+
+  @@unique([assignmentId, studentId])
+  @@map("assignment_submissions")
+}
+
+// ─────────────────────────────────────────────
+// CBT EXAM
+// ─────────────────────────────────────────────
+
+model CBTExam {
+  id            String      @id @default(cuid())
+  tutorId       String
+  moduleId      String
+  title         String
+  description   String?
+  track         TrackLevel
+  durationMins  Int         @default(30)
+  totalQuestions Int        @default(15)
+  passScore     Float       @default(50)
+  isPublished   Boolean     @default(false)
+  isVetted      Boolean     @default(false)  // Super admin vetting
+  scheduledFor  DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  tutor         Tutor       @relation(fields: [tutorId], references: [id])
+  module        Module      @relation(fields: [moduleId], references: [id])
+  questions     CBTQuestion[]
+  attempts      ExamAttempt[]
+  exams         Exam[]
+
+  schedules  ExamSchedule[]
+
+  @@map("cbt_exams")
+}
+
+model CBTQuestion {
+  id          String    @id @default(cuid())
+  examId      String
+  number      Int
+  questionText String
+  options     String[]  // Array of 4 options
+  correctIndex Int      // 0-3
+  explanation  String?
+  imageUrl    String?   // Cloudinary
+
+  exam        CBTExam   @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, number])
+  @@map("cbt_questions")
+}
+
+model ExamAttempt {
+  id            String      @id @default(cuid())
+  cbtExamId     String
+  studentId     String
+  examId        String?
+  answers       Json        // { questionIndex: selectedOption }
+  score         Float?
+  totalCorrect  Int?
+  timeTaken     Int?        // seconds
+  status        ExamStatus  @default(IN_PROGRESS)
+  startedAt     DateTime    @default(now())
+  submittedAt   DateTime?
+
+  cbtExam       CBTExam     @relation(fields: [cbtExamId], references: [id])
+  student       Student     @relation(fields: [studentId], references: [id])
+  exam          Exam?       @relation(fields: [examId], references: [id])
+
+  @@map("exam_attempts")
+}
+
+// ─────────────────────────────────────────────
+// SCHEDULED EXAM (calendar)
+// ─────────────────────────────────────────────
+
+model Exam {
+  id          String    @id @default(cuid())
+  schoolId    String
+  moduleId    String
+  cbtExamId   String?
+  title       String
+  scheduledAt DateTime
+  venue       String?
+  status      ExamStatus @default(SCHEDULED)
+  createdAt   DateTime   @default(now())
+
+  school      School     @relation(fields: [schoolId], references: [id])
+  module      Module     @relation(fields: [moduleId], references: [id])
+  cbtExam     CBTExam?   @relation(fields: [cbtExamId], references: [id])
+  attempts    ExamAttempt[]
+
+  @@map("exams")
+}
+
+// ─────────────────────────────────────────────
+// WEEKLY REPORT
+// ─────────────────────────────────────────────
+
+model WeeklyReport {
+  id              String        @id @default(cuid())
+  tutorId         String
+  schoolId        String
+  weekStart       DateTime      @db.Date
+  weekEnd         DateTime      @db.Date
+  track           TrackLevel
+  className       String
+  topicsCoins     String[]      // Topics covered
+  attendanceRate  Float
+  highlights      String?
+  challenges      String?
+  nextWeekPlan    String?
+  status          ReportStatus  @default(DRAFT)
+  submittedAt     DateTime?
+  reviewedBy      String?
+  reviewNotes     String?
+  attachmentUrl   String?       // Cloudinary
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  tutor           Tutor         @relation(fields: [tutorId], references: [id])
+  school          School        @relation(fields: [schoolId], references: [id])
+
+  @@map("weekly_reports")
+}
+
+// ─────────────────────────────────────────────
+// NOTICE
+// ─────────────────────────────────────────────
+
+model Notice {
+  id        String      @id @default(cuid())
+  schoolId  String
+  title     String
+  body      String
+  type      NoticeType  @default(INFO)
+  publishedAt DateTime  @default(now())
+  expiresAt DateTime?
+  createdBy String
+
+  school    School      @relation(fields: [schoolId], references: [id])
+
+  @@map("notices")
+}
+
+// ─────────────────────────────────────────────
+// PAYMENT
+// ─────────────────────────────────────────────
+
+model Payment {
+  id            String    @id @default(cuid())
+  schoolId      String
+  amount        Float
+  description   String
+  receiptUrl    String?   // Cloudinary
+  paidAt        DateTime?
+  isPaid        Boolean   @default(false)
+  termLabel     String
+  createdAt     DateTime  @default(now())
+
+  school        School    @relation(fields: [schoolId], references: [id])
+
+  transactions  PaystackTransaction[]
+
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATION
+// ─────────────────────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  isRead    Boolean   @default(false)
+  link      String?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────
+// UPLOAD RECORD
+// ─────────────────────────────────────────────
+
+model Upload {
+  id          String    @id @default(cuid())
+  publicId    String    @unique  // Cloudinary public_id
+  url         String
+  resourceType String
+  uploadedBy  String
+  entityType  String    // "avatar", "assignment", "report", "receipt"
+  entityId    String?
+  createdAt   DateTime  @default(now())
+
+  @@map("uploads")
+}
+
+// ─────────────────────────────────────────────
+// MESSAGES (tutor ↔ student direct messaging)
+// ─────────────────────────────────────────────
+
+model Conversation {
+  id          String    @id @default(cuid())
+  tutorId     String
+  studentId   String
+  schoolId    String
+  lastMessage String?
+  lastAt      DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  tutor     User      @relation("TutorConversations",   fields: [tutorId],   references: [id])
+  student   User      @relation("StudentConversations", fields: [studentId], references: [id])
+  messages  Message[]
+
+  @@unique([tutorId, studentId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  conversation  Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender        User          @relation("SentMessages", fields: [senderId], references: [id])
+
+  @@map("messages")
+}
+
+// Student ↔ student (same class) direct messages — separate from tutor ↔ student Conversation
+model PeerConversation {
+  id           String   @id @default(cuid())
+  schoolId     String
+  userLowerId  String
+  userHigherId String
+  lastMessage  String?
+  lastAt       DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  school   School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  messages PeerMessage[]
+
+  @@unique([userLowerId, userHigherId])
+  @@map("peer_conversations")
+}
+
+model PeerMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  conversation PeerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User             @relation("PeerMessageSender", fields: [senderId], references: [id])
+
+  @@map("peer_messages")
+}
+
+// ─────────────────────────────────────────────
+// LESSON PLANS
+// ─────────────────────────────────────────────
+
+model LessonPlan {
+  id          String   @id @default(cuid())
+  tutorId     String
+  schoolId    String
+  className   String
+  moduleId    String
+  title       String
+  durationMins Int     @default(75)
+  venue       String?
+  scheduledAt DateTime?
+  steps       Json     // Array of {title, desc, color}
+  isPublished Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tutor User @relation("TutorLessonPlans", fields: [tutorId], references: [id])
+  module Module @relation(fields: [moduleId], references: [id])
+
+  @@map("lesson_plans")
+}
+
+// ─────────────────────────────────────────────
+// CERTIFICATES
+// ─────────────────────────────────────────────
+
+model Certificate {
+  id           String   @id @default(cuid())
+  studentId    String
+  track        String
+  serialNumber String   @unique
+  pdfUrl       String?
+  qrCode       String?
+  averageScore Float
+  issueDate    DateTime @default(now())
+  expiryDate   DateTime?
+  isRevoked    Boolean  @default(false)
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("certificates")
+}
+
+// ─────────────────────────────────────────────
+// SESSION LOGS (tutor accountability)
+// ─────────────────────────────────────────────
+
+model SessionLog {
+  id                  String   @id @default(cuid())
+  tutorId             String
+  schoolId            String
+  className           String
+  track               String
+  moduleTitle         String?
+  /// Links to tutor ↔ school ↔ class row for reporting (optional for legacy rows)
+  tutorAssignmentId   String?
+  /// Curriculum module taught this session (track must match class)
+  moduleId            String?
+  startedAt           DateTime @default(now())
+  endedAt             DateTime?
+  durationMins        Int?
+  studentsPresent     Int      @default(0)
+  notes               String?
+
+  tutor             User              @relation("TutorSessions", fields: [tutorId], references: [id])
+  school            School            @relation(fields: [schoolId], references: [id])
+  tutorAssignment   TutorAssignment?  @relation(fields: [tutorAssignmentId], references: [id], onDelete: SetNull)
+  module            Module?           @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+
+  @@index([tutorAssignmentId])
+  @@index([moduleId])
+  @@map("session_logs")
+}
+
+// ─────────────────────────────────────────────
+// PAYROLL
+// ─────────────────────────────────────────────
+
+model TutorPayroll {
+  id             String   @id @default(cuid())
+  tutorId        String
+  schoolId       String
+  month          Int
+  year           Int
+  totalSessions  Int      @default(0)
+  ratePerSession Float    @default(0)
+  grossAmount    Float    @default(0)
+  deductions     Float    @default(0)
+  netAmount      Float    @default(0)
+  isPaid         Boolean  @default(false)
+  paidAt         DateTime?
+  notes          String?
+  reportIds      String[]
+  createdAt      DateTime @default(now())
+
+  tutor  Tutor  @relation(fields: [tutorId], references: [id])
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@unique([tutorId, schoolId, month, year])
+  @@map("tutor_payroll")
+}
+
+// ─────────────────────────────────────────────
+// EXAM ↔ CLASS ASSIGNMENT
+// ─────────────────────────────────────────────
+
+model ExamSchedule {
+  id           String     @id @default(cuid())
+  cbtExamId    String
+  schoolId     String
+  className    String
+  scheduledAt  DateTime
+  venue        String?
+  durationMins Int        @default(30)
+  status       ExamStatus @default(SCHEDULED)
+  createdBy    String
+  accessCode   String     @default("")
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+
+  cbtExam CBTExam @relation(fields: [cbtExamId], references: [id])
+  school  School  @relation(fields: [schoolId],  references: [id])
+
+  @@map("exam_schedules")
+}
+
+
+// ─────────────────────────────────────────────
+// PAYSTACK PAYMENT TRANSACTIONS
+// ─────────────────────────────────────────────
+model PaystackTransaction {
+  id            String   @id @default(cuid())
+  paymentId     String
+  reference     String   @unique
+  amount        Float
+  currency      String   @default("NGN")
+  status        String   @default("pending")  // pending | success | failed
+  channel       String?  // card | bank_transfer | ussd
+  paidAt        DateTime?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@map("paystack_transactions")
+}
+
+// ─────────────────────────────────────────────
+// ASSIGNMENTS (tutor-created homework)
+// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// ASSIGNMENTS (tutor-created homework)
+// ─────────────────────────────────────────────
+model ClassAssignment {
+  id           String   @id @default(cuid())
+  tutorId      String
+  schoolId     String
+  className    String
+  moduleId     String?
+  title        String
+  description  String
+  dueDate      DateTime
+  attachmentUrl String?
+  maxScore     Int      @default(100)
+  isPublished  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  tutor         User                       @relation("TutorAssignments", fields: [tutorId], references: [id])
+  school        School                     @relation(fields: [schoolId], references: [id])
+  submissions   ClassAssignmentSubmission[]
+
+  @@map("class_assignments")
+}
+
+model ClassAssignmentSubmission {
+  id             String   @id @default(cuid())
+  assignmentId   String
+  studentId      String
+  fileUrl        String?
+  textBody       String?
+  score          Float?
+  feedback       String?
+  status         String   @default("SUBMITTED")  // SUBMITTED | GRADED | LATE
+  submittedAt    DateTime @default(now())
+  gradedAt       DateTime?
+
+  assignment ClassAssignment @relation(fields: [assignmentId], references: [id])
+  student    Student         @relation("StudentAssignmentSubmissions", fields: [studentId], references: [id])
+
+  @@unique([assignmentId, studentId])
+  @@map("class_assignment_submissions")
+}
+
+model PracticalTask {
+  id           String   @id @default(cuid())
+  tutorId      String
+  schoolId     String
+  className    String
+  moduleId     String
+  title        String
+  description  String?
+  instructions String?
+  dueDate      DateTime?
+  maxScore     Int      @default(100)
+  passScore    Float    @default(50)
+  rubric       Json?
+  isPublished  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  module      Module               @relation(fields: [moduleId], references: [id])
+  submissions PracticalSubmission[]
+
+  @@index([schoolId, className, moduleId])
+  @@map("practical_tasks")
+}
+
+model PracticalSubmission {
+  id             String   @id @default(cuid())
+  taskId         String
+  studentId      String
+  evidenceUrl    String?
+  evidenceText   String?
+  scoreBreakdown Json?
+  totalScore     Float?
+  feedback       String?
+  status         String   @default("SUBMITTED")
+  submittedAt    DateTime @default(now())
+  gradedAt       DateTime?
+  gradedBy       String?
+
+  task PracticalTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, studentId])
+  @@index([studentId])
+  @@map("practical_submissions")
+}

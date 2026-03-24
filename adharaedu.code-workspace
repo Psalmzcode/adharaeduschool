@@ -1,0 +1,15 @@
+{
+  "folders": [
+    {
+      "name": "frontend",
+      "path": "frontend"
+    },
+    {
+      "name": "backend",
+      "path": "backend/backend"
+    }
+  ],
+  "settings": {
+    "terminal.integrated.cwd": "${workspaceFolder:frontend}"
+  }
+}

@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: adharaedu-backend
+    env: node
+    rootDir: backend/backend
+    autoDeploy: true
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm prisma generate && pnpm build
+    startCommand: pnpm prisma migrate deploy && pnpm start:prod
+    healthCheckPath: /api/v1
