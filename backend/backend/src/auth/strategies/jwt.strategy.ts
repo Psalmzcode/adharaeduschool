@@ -16,10 +16,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; email: string; role: string }) {
+  async validate(payload: { sub: string; email?: string | null; username?: string | null; role: string }) {
     const user = await this.findUserWithReconnect(payload.sub);
     if (!user || !user.isActive) throw new UnauthorizedException();
-    return { sub: user.id, email: user.email, role: user.role };
+    return { sub: user.id, email: user.email, username: user.username, role: user.role };
   }
 
   private async findUserWithReconnect(userId: string) {

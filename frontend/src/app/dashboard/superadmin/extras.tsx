@@ -15,7 +15,12 @@ function SAPayroll() {
   useEffect(() => {
     Promise.all([payrollApi.all(), payrollApi.summary()])
       .then(([d, s]) => { setData(Array.isArray(d) ? d : []); setSummary(s || {}) })
-      .catch(() => {}).finally(() => setLoading(false))
+      .catch((e) => {
+        notify.fromError(e, 'Could not load payroll')
+        setData([])
+        setSummary({})
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   const calculate = async (e: React.FormEvent) => {
@@ -54,7 +59,16 @@ function SAPayroll() {
             </select>
           </div>
           <div><label className="form-label">Year</label><input type="number" className="form-input" value={calc.year} onChange={e => setCalc({ ...calc, year: +e.target.value })} /></div>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}><button type="submit" className="btn btn-primary btn-sm" style={{ width: '100%' }} disabled={calculating}>{calculating ? 'Calculating…' : 'Calculate & Save'}</button></div>
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              style={{ width: '100%', justifyContent: 'center' }}
+              disabled={calculating}
+            >
+              {calculating ? 'Calculating…' : 'Calculate & Save'}
+            </button>
+          </div>
         </form>
       </div>
       {loading ? <p className="text-muted text-sm" style={{ padding: 20 }}>Loading…</p> : (

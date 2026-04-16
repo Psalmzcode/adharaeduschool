@@ -16,6 +16,8 @@ datasource db {
 
 enum Role {
   SUPER_ADMIN
+  /// Authors canonical curriculum (tracks/modules/lessons); cannot manage schools or users.
+  CURRICULUM_LEAD
   SCHOOL_ADMIN
   TUTOR
   STUDENT
@@ -88,11 +90,35 @@ enum TutorOnboardingStatus {
   COMPLETE
 }
 
+/// Email one-time codes (passwordless sign-in, etc.)
+enum OtpPurpose {
+  SIGN_IN
+}
+
 enum TutorIdentificationType {
   NIN
   VOTERS_CARD
   DRIVERS_LICENSE
   INTERNATIONAL_PASSPORT
+}
+
+/// Branch for Track 3 modules 3–4 (handbook Stack A vs B). Tutor picks per class assignment; copied to students.
+enum Track3Stack {
+  PYTHON_FLASK
+  REACT_NODE
+}
+
+/// Curriculum variant: COMMON = all Track 1–2 modules + Track 3 shared modules (1, 2, 5, 6).
+enum ModuleStackVariant {
+  COMMON
+  PYTHON_FLASK
+  REACT_NODE
+}
+
+enum ModuleType {
+  STANDARD
+  /// Term-level \"main exam\" module used to anchor CBT exams that combine multiple modules.
+  TERM_EXAM
 }
 
 // ─────────────────────────────────────────────
@@ -101,7 +127,10 @@ enum TutorIdentificationType {
 
 model User {
   id            String    @id @default(cuid())
-  email         String    @unique
+  /// Optional for students who sign in with username only; staff/parents typically have email.
+  email         String?   @unique
+  /// Unique login handle (lowercase). Required for students without a personal email.
+  username      String?   @unique
   password      String
   role          Role
   firstName     String
@@ -112,6 +141,8 @@ model User {
   notifyNewMessage      Boolean @default(true)
   notifyReportDeadline  Boolean @default(true)
   notifyExamResults     Boolean @default(false)
+  /// When true (typically new students), UI may prompt to change from the default password.
+  mustChangePassword    Boolean   @default(false)
   isActive      Boolean   @default(true)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -146,6 +177,20 @@ model Session {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("sessions")
+}
+
+model OtpCode {
+  id           String     @id @default(cuid())
+  email        String
+  codeHash     String
+  purpose      OtpPurpose @default(SIGN_IN)
+  expiresAt    DateTime
+  attemptCount Int        @default(0)
+  consumedAt   DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@index([email, purpose])
+  @@map("otp_codes")
 }
 
 // ─────────────────────────────────────────────
@@ -210,6 +255,7 @@ model School {
   examSchedules       ExamSchedule[]
   classAssignments    ClassAssignment[]
   peerConversations   PeerConversation[]
+  classCurriculumStates ClassCurriculumState[]
 
   @@map("schools")
 }
@@ -257,6 +303,8 @@ model TutorAssignment {
   track       TrackLevel
   className   String    // e.g. "SS3A"
   termLabel   String    // e.g. "2025/2026 Term 2"
+  /// Required when track is TRACK_3: which stack the tutor teaches for modules 3–4.
+  track3Stack Track3Stack?
   /// Target teaching sessions per week for this class (delivered vs expected reports)
   expectedSessionsPerWeek Int @default(3)
   isActive    Boolean   @default(true)
@@ -283,6 +331,8 @@ model Student {
   schoolId      String
   className     String      // e.g. SS3A
   track         TrackLevel
+  /// Track 3 only: Python/Flask vs React/Node path — synced from tutor assignment for this class.
+  track3Stack   Track3Stack?
   termLabel     String
   parentId      String?
   createdAt     DateTime    @default(now())
@@ -292,6 +342,7 @@ model Student {
   school        School      @relation(fields: [schoolId], references: [id])
   parent        Parent?     @relation(fields: [parentId], references: [id])
   moduleProgress ModuleProgress[]
+  lessonProgress StudentLessonProgress[]
   attendanceRecords Attendance[]
   examAttempts  ExamAttempt[]
   submissions   AssignmentSubmission[]
@@ -328,6 +379,11 @@ model Module {
   id          String      @id @default(cuid())
   track       TrackLevel
   number      Int         // Module 1, 2, 3...
+  /// Track 3: COMMON for shared modules; PYTHON_FLASK / REACT_NODE for branching modules 3–4 only.
+  stackVariant ModuleStackVariant @default(COMMON)
+  moduleType  ModuleType  @default(STANDARD)
+  /// Only for TERM_EXAM modules: 1, 2, or 3 (maps to the school's termLabel naming).
+  termOrdinal Int?
   title       String
   description String
   objectives  String[]
@@ -342,15 +398,87 @@ model Module {
   cbtExams    CBTExam[]
   practicalTasks PracticalTask[]
   sessionLogs SessionLog[]
+  curriculumLessons CurriculumLesson[]
 
-  @@unique([track, number])
+  @@unique([track, number, stackVariant])
   @@map("modules")
+}
+
+/// Canonical lesson authored by curriculum (source of truth for delivery).
+model CurriculumLesson {
+  id                    String   @id @default(cuid())
+  moduleId              String
+  position              Int      @default(1)
+  title                 String
+  objective             String?
+  /// Timed segments: [{ "label": string, "minutes": number }, ...]
+  outline               Json?
+  /// Free-form exercise list (strings or structured objects)
+  exercises             Json?
+  takeHomeTask          String?
+  quickCheckQuestions   Json?
+  resources             Json?
+  estimatedDurationMins Int      @default(60)
+  isPublished           Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  module                Module   @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  sessionLogs           SessionLog[]
+  lessonPlans           LessonPlan[]
+  studentProgress       StudentLessonProgress[]
+  classStatesAsCurrent  ClassCurriculumState[] @relation("ClassCurrentLesson")
+
+  @@unique([moduleId, position])
+  @@index([moduleId])
+  @@map("curriculum_lessons")
+}
+
+/// Next lesson the class is scheduled to receive (per school + class + track branch).
+model ClassCurriculumState {
+  id                    String   @id @default(cuid())
+  schoolId              String
+  className             String
+  /// e.g. TRACK_1, TRACK_2, TRACK_3_PYTHON_FLASK (see curriculum-branch helper)
+  curriculumBranchKey   String
+  currentLessonId       String?
+  updatedAt             DateTime @updatedAt
+
+  school                School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  currentLesson         CurriculumLesson? @relation("ClassCurrentLesson", fields: [currentLessonId], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, className, curriculumBranchKey])
+  @@index([schoolId, className])
+  @@map("class_curriculum_state")
+}
+
+model StudentLessonProgress {
+  id              String    @id @default(cuid())
+  studentId       String
+  lessonId        String
+  sessionId       String?
+  completed       Boolean   @default(false)
+  quickCheckScore Float?
+  exerciseScores  Json?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  student         Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  lesson          CurriculumLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  session         SessionLog? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, lessonId])
+  @@index([lessonId])
+  @@map("student_lesson_progress")
 }
 
 model ModuleProgress {
   id          String        @id @default(cuid())
   studentId   String
   moduleId    String
+  /// Term label at the time this progress row was created (for termly reporting/billing)
+  termLabel   String?
   status      ModuleStatus  @default(LOCKED)
   score       Float?
   completedAt DateTime?
@@ -372,6 +500,8 @@ model Attendance {
   id          String            @id @default(cuid())
   studentId   String
   date        DateTime          @db.Date
+  /// Term label captured when attendance was recorded
+  termLabel   String?
   status      AttendanceStatus  @default(PRESENT)
   notes       String?
   markedBy    String?           // tutorId
@@ -473,6 +603,10 @@ model ExamAttempt {
   cbtExamId     String
   studentId     String
   examId        String?
+  /// When the attempt was started from a scheduled exam (My Exams / login-schedule).
+  examScheduleId String?
+  /// Term label captured when the attempt was started
+  termLabel     String?
   answers       Json        // { questionIndex: selectedOption }
   score         Float?
   totalCorrect  Int?
@@ -484,6 +618,7 @@ model ExamAttempt {
   cbtExam       CBTExam     @relation(fields: [cbtExamId], references: [id])
   student       Student     @relation(fields: [studentId], references: [id])
   exam          Exam?       @relation(fields: [examId], references: [id])
+  examSchedule  ExamSchedule? @relation(fields: [examScheduleId], references: [id], onDelete: SetNull)
 
   @@map("exam_attempts")
 }
@@ -694,6 +829,8 @@ model LessonPlan {
   schoolId    String
   className   String
   moduleId    String
+  /// Optional link to canonical curriculum lesson (tutor prep still lives in `steps`).
+  curriculumLessonId String?
   title       String
   durationMins Int     @default(75)
   venue       String?
@@ -705,6 +842,7 @@ model LessonPlan {
 
   tutor User @relation("TutorLessonPlans", fields: [tutorId], references: [id])
   module Module @relation(fields: [moduleId], references: [id])
+  curriculumLesson CurriculumLesson? @relation(fields: [curriculumLessonId], references: [id], onDelete: SetNull)
 
   @@map("lesson_plans")
 }
@@ -741,10 +879,14 @@ model SessionLog {
   className           String
   track               String
   moduleTitle         String?
+  /// Term label captured when the session started (for termly activity reporting)
+  termLabel           String?
   /// Links to tutor ↔ school ↔ class row for reporting (optional for legacy rows)
   tutorAssignmentId   String?
   /// Curriculum module taught this session (track must match class)
   moduleId            String?
+  /// Canonical lesson delivered this session (required when the module has published lessons)
+  lessonId            String?
   startedAt           DateTime @default(now())
   endedAt             DateTime?
   durationMins        Int?
@@ -755,9 +897,12 @@ model SessionLog {
   school            School            @relation(fields: [schoolId], references: [id])
   tutorAssignment   TutorAssignment?  @relation(fields: [tutorAssignmentId], references: [id], onDelete: SetNull)
   module            Module?           @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  lesson            CurriculumLesson? @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  studentLessonProgress StudentLessonProgress[]
 
   @@index([tutorAssignmentId])
   @@index([moduleId])
+  @@index([lessonId])
   @@map("session_logs")
 }
 
@@ -805,10 +950,15 @@ model ExamSchedule {
   createdBy    String
   accessCode   String     @default("")
   isActive     Boolean    @default(true)
+  /// When true, students see "submitted" but not score until `resultsReleasedAt` is set.
+  awaitTutorResultRelease Boolean @default(false)
+  /// Tutor (or admin) marks results visible for the class.
+  resultsReleasedAt      DateTime?
   createdAt    DateTime   @default(now())
 
   cbtExam CBTExam @relation(fields: [cbtExamId], references: [id])
   school  School  @relation(fields: [schoolId],  references: [id])
+  attempts ExamAttempt[]
 
   @@map("exam_schedules")
 }
@@ -866,6 +1016,8 @@ model ClassAssignmentSubmission {
   id             String   @id @default(cuid())
   assignmentId   String
   studentId      String
+  /// Term label captured when the submission was created
+  termLabel      String?
   fileUrl        String?
   textBody       String?
   score          Float?
@@ -909,6 +1061,8 @@ model PracticalSubmission {
   id             String   @id @default(cuid())
   taskId         String
   studentId      String
+  /// Term label captured when the submission was created
+  termLabel      String?
   evidenceUrl    String?
   evidenceText   String?
   scoreBreakdown Json?

@@ -9,15 +9,135 @@ import { TutorProfileDetail } from '@/components/TutorProfileDetail'
 import {
   tutorsApi, attendanceApi, cbtApi, reportsApi,
   lessonsApi, messagesApi, studentsApi, usersApi, uploadsApi,
-  sessionsApi, assignmentsApi, examSchedulesApi, payrollApi, bulkUploadApi, modulesApi, schoolClassesApi, tracksApi, practicalsApi
+  sessionsApi, assignmentsApi, examSchedulesApi, bulkUploadApi, modulesApi, schoolClassesApi, tracksApi, practicalsApi,
+  curriculumApi,
 } from '@/lib/api'
 import { notify } from '@/lib/notify'
+
+function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+  if (!open) return null
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(4px)',
+        zIndex: 1200,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 720,
+          maxHeight: '90vh',
+          background: 'var(--navy2)',
+          border: '1px solid var(--border)',
+          borderRadius: 18,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--white)' }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20 }}>✕</button>
+        </div>
+        <div style={{ padding: 16, overflow: 'auto' }}>{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function ConfirmModal({
+  open,
+  title,
+  message,
+  confirmText = 'Confirm',
+  cancelText = 'Cancel',
+  danger,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean
+  title: string
+  message: React.ReactNode
+  confirmText?: string
+  cancelText?: string
+  danger?: boolean
+  busy?: boolean
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title={title}>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <div className="text-sm text-muted" style={{ lineHeight: 1.6 }}>
+          {message}
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} disabled={busy}>
+            {cancelText}
+          </button>
+          <button
+            type="button"
+            className={`btn ${danger ? 'btn-danger' : 'btn-primary'} btn-sm`}
+            onClick={onConfirm}
+            disabled={busy}
+            style={{ justifyContent: 'center', minWidth: 140 }}
+          >
+            {busy ? 'Please wait…' : confirmText}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
 
 // ─── types ───────────────────────────────────────────────────
 interface Student { id: string; name: string; reg: string; className: string; avg: number; att: number; atRisk: boolean; init: string; c: string; tc: string }
 interface TutorStats { activeSchools: number; totalStudents: number; submittedReports: number; pendingReports: number; cbtExams: number; rating: number }
 
 // ─── helpers ─────────────────────────────────────────────────
+/** Same merge as tutor dashboard init — assignment rows from API + school registry classes. */
+async function fetchMergedTutorClasses(): Promise<any[]> {
+  const c = await tutorsApi.myClasses()
+  const backendClasses = Array.isArray(c) ? c : []
+  const norm = (v: any) => String(v || '').trim().toUpperCase()
+  const keyOf = (row: any) => {
+    const schoolId = String(row?.schoolId || row?.school?.id || '').trim()
+    return `${schoolId}::${norm(row?.className)}::${norm(row?.track)}`
+  }
+  const schoolIds = Array.from(new Set(backendClasses.map((x: any) => x.schoolId || x.school?.id).filter(Boolean)))
+  const savedClassArrays = await Promise.all(schoolIds.map((schoolId) => schoolClassesApi.all(schoolId).catch(() => [])))
+  const savedClasses = savedClassArrays.flat().map((sc: any) => ({
+    id: sc.id || `school-class-${sc.className}`,
+    className: String(sc.className || '').trim(),
+    track: sc.track,
+    schoolId: sc.schoolId,
+    school: backendClasses.find((b: any) => (b.schoolId || b.school?.id) === sc.schoolId)?.school || null,
+    students: [],
+  }))
+  // De-dupe by (schoolId, className, track). Prefer backend rows (they include real students).
+  const byKey = new Map<string, any>()
+  for (const row of backendClasses) {
+    const k = keyOf(row)
+    if (!k.startsWith('::')) byKey.set(k, row)
+  }
+  for (const row of savedClasses) {
+    const k = keyOf(row)
+    if (!k.startsWith('::') && !byKey.has(k)) byKey.set(k, row)
+  }
+  return Array.from(byKey.values())
+}
+
 function initials(name: string) { return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() }
 const COLORS = ['rgba(212,168,83,0.2)','rgba(26,127,212,0.2)','rgba(139,92,246,0.2)','rgba(34,197,94,0.2)','rgba(239,68,68,0.2)','rgba(245,158,11,0.2)']
 const TEXT_COLORS = ['var(--gold)','var(--teal2)','#A78BFA','#4ADE80','#F87171','#FCD34D']
@@ -127,26 +247,14 @@ function TutorClasses({
   onClassesChange: React.Dispatch<React.SetStateAction<any[]>>
   onOpenClass: (className: string) => void
 }) {
-  const [showAddClass, setShowAddClass] = useState(false)
-  const [savingClass, setSavingClass] = useState(false)
-  const [classForm, setClassForm] = useState({ className: '', track: 'TRACK_1' })
+  // NOTE: School Admin owns class creation for billing control.
   const { data: dynamicTracks } = useQuery({
     queryKey: ['tutor', 'tracks-options'],
     queryFn: () => tracksApi.all(),
     staleTime: 60_000,
     retry: 1,
   })
-  const trackOptions = (Array.isArray(dynamicTracks) ? dynamicTracks : [])
-    .filter((t: any) => t.isActive !== false)
-    .map((t: any) => ({ code: String(t.code), label: String(t.name || String(t.code).replace('TRACK_', 'Track ')) }))
-  useEffect(() => {
-    if (!trackOptions.length) return
-    if (!trackOptions.some((t) => t.code === classForm.track)) {
-      setClassForm((prev) => ({ ...prev, track: trackOptions[0].code }))
-    }
-  }, [JSON.stringify(trackOptions), classForm.track])
 
-  const resolveSchoolId = () => classes[0]?.schoolId || classes[0]?.school?.id || ''
   const grouped = classes.reduce((acc: Record<string, any>, c: any) => {
     const key = c.className || 'Unassigned'
     if (!acc[key]) {
@@ -171,44 +279,6 @@ function TutorClasses({
     })
     .sort((a: any, b: any) => a.className.localeCompare(b.className))
 
-  const addClass = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const className = classForm.className.trim().toUpperCase()
-    if (!className) return
-    if (classes.some((c: any) => c.className === className)) {
-      notify.warning('Class already exists')
-      return
-    }
-    setSavingClass(true)
-    const schoolId = resolveSchoolId()
-    if (!schoolId) {
-      notify.warning('No school found for this tutor')
-      setSavingClass(false)
-      return
-    }
-    try {
-      const created = await schoolClassesApi.create({
-        schoolId,
-        className,
-        track: classForm.track,
-      })
-      const newClass = {
-        id: created.id || `school-class-${created.className}`,
-        className: created.className,
-        track: created.track,
-        schoolId,
-        school: classes[0]?.school || null,
-        students: [],
-      }
-      onClassesChange((prev) => [...prev, newClass])
-      setClassForm({ className: '', track: classForm.track })
-      setShowAddClass(false)
-    } catch (e: any) {
-      notify.error(e?.message || 'Failed to create class')
-    }
-    setSavingClass(false)
-  }
-
   return (
     <div>
       <div className="flex-between mb-20">
@@ -216,30 +286,7 @@ function TutorClasses({
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Classes</h3>
           <div className="text-muted text-sm">{classCards.length} classes assigned</div>
         </div>
-        <button onClick={() => setShowAddClass((v) => !v)} className="btn btn-primary btn-sm">+ Add Class</button>
       </div>
-      {showAddClass && (
-        <div className="card mb-20">
-          <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Add Class</div>
-          <form onSubmit={addClass} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12 }}>
-            <div>
-              <label className="form-label">Class Name</label>
-              <input className="form-input" placeholder="e.g. SS2C" value={classForm.className} onChange={(e) => setClassForm({ ...classForm, className: e.target.value })} />
-            </div>
-            <div>
-              <label className="form-label">Track</label>
-              <select className="form-input" value={classForm.track} onChange={(e) => setClassForm({ ...classForm, track: e.target.value })} style={{ appearance: 'none' }}>
-                {(trackOptions.length ? trackOptions : [{ code: 'TRACK_1', label: 'Track 1' }, { code: 'TRACK_2', label: 'Track 2' }, { code: 'TRACK_3', label: 'Track 3' }]).map((t) => (
-                  <option key={t.code} value={t.code}>{t.label}</option>
-                ))}
-              </select>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-              <button type="submit" className="btn btn-primary btn-sm" disabled={savingClass}>{savingClass ? 'Saving…' : 'Add Class'}</button>
-            </div>
-          </form>
-        </div>
-      )}
       <div className="content-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))' }}>
         {classCards.map((c: any) => (
           <button
@@ -290,23 +337,38 @@ function TutorStudents({
   onClearClass?: () => void
 }) {
   const [search, setSearch] = useState('')
-  const [showAddStudent, setShowAddStudent] = useState(false)
-  const [showBulkUpload, setShowBulkUpload] = useState(false)
-  const [savingStudent, setSavingStudent] = useState(false)
-  const [savingBulk, setSavingBulk] = useState(false)
-  const [studentForm, setStudentForm] = useState({ firstName: '', lastName: '', email: '', className: classes[0]?.className || '', track: classes[0]?.track || 'TRACK_1' })
+  // NOTE: School Admin owns student creation (single + bulk) for billing control.
+  const [selectedStudentIds, setSelectedStudentIds] = useState<Record<string, boolean>>({})
+  const [bulkDeactivating, setBulkDeactivating] = useState(false)
+  const [bulkDeactivateProgress, setBulkDeactivateProgress] = useState<{ total: number; done: number; succeeded: number; failed: number } | null>(null)
+  const [tempPwByStudentId, setTempPwByStudentId] = useState<Record<string, string>>({})
+  const [revealPwByStudentId, setRevealPwByStudentId] = useState<Record<string, boolean>>({})
+  const [resettingPwByStudentId, setResettingPwByStudentId] = useState<Record<string, boolean>>({})
+  const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
+  const [studentForm, setStudentForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    username: '',
+    className: classes[0]?.className || '',
+    track: classes[0]?.track || 'TRACK_1',
+  })
   const [bulkForm, setBulkForm] = useState({ className: classes[0]?.className || '', termLabel: '2025/2026 Term 2', csv: '' })
 
   const classTrackMap = classes.reduce((acc: Record<string, string>, c: any) => {
     if (c?.className && c?.track) acc[c.className] = c.track
     return acc
   }, {})
-  const classOptions = Array.from(new Set(classes.map((c: any) => c.className))).filter(Boolean).sort()
+  // Only show classes the tutor is actually assigned to.
+  // `fetchMergedTutorClasses()` also merges in school registry classes (ids like "school-class-SS3A"),
+  // which the tutor is NOT necessarily assigned to and the backend will forbid bulk upload for.
+  const assignedClasses = classes.filter((c: any) => !String(c?.id || '').startsWith('school-class-'))
+  const classOptions = Array.from(new Set(assignedClasses.map((c: any) => c.className))).filter(Boolean).sort()
   const resolveSchoolId = (className?: string) =>
-    classes.find((c: any) => c.className === className)?.schoolId ||
-    classes.find((c: any) => c.className === className)?.school?.id ||
-    classes[0]?.schoolId ||
-    classes[0]?.school?.id ||
+    assignedClasses.find((c: any) => c.className === className)?.schoolId ||
+    assignedClasses.find((c: any) => c.className === className)?.school?.id ||
+    assignedClasses[0]?.schoolId ||
+    assignedClasses[0]?.school?.id ||
     ''
 
   useEffect(() => {
@@ -319,78 +381,6 @@ function TutorStudents({
     }
   }, [classOptions, classTrackMap, studentForm.className, bulkForm.className])
 
-  const addStudent = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const schoolId = resolveSchoolId(studentForm.className)
-    if (!schoolId) {
-      notify.warning('No school found for selected class')
-      return
-    }
-    setSavingStudent(true)
-    const track = classTrackMap[studentForm.className] || studentForm.track
-    try {
-      const created = await studentsApi.create({
-        firstName: studentForm.firstName,
-        lastName: studentForm.lastName,
-        email: studentForm.email,
-        className: studentForm.className,
-        track,
-        schoolId,
-        termLabel: '2025/2026 Term 2',
-      })
-      onClassesChange((prev) =>
-        prev.map((c: any) =>
-          c.className === studentForm.className
-            ? { ...c, students: [...(c.students || []), created] }
-            : c
-        )
-      )
-      setStudentForm((prev) => ({ ...prev, firstName: '', lastName: '', email: '' }))
-      setShowAddStudent(false)
-    } catch (e: any) {
-      notify.error(e?.message || 'Failed to add student')
-    }
-    setSavingStudent(false)
-  }
-
-  const bulkUpload = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const schoolId = resolveSchoolId(bulkForm.className)
-    if (!schoolId) {
-      notify.warning('No school found for selected class')
-      return
-    }
-    if (!bulkForm.csv.trim()) {
-      notify.warning('Paste CSV rows first')
-      return
-    }
-    setSavingBulk(true)
-    try {
-      const track = classTrackMap[bulkForm.className] || 'TRACK_1'
-      const res = await bulkUploadApi.csv(bulkForm.csv, schoolId, {
-        className: bulkForm.className,
-        track,
-        termLabel: bulkForm.termLabel,
-      })
-      const createdCount =
-        (typeof (res as any)?.succeeded === 'number' && (res as any).succeeded) ||
-        (typeof (res as any)?.createdCount === 'number' && (res as any).createdCount) ||
-        (Array.isArray((res as any)?.created) && (res as any).created.length) ||
-        (Array.isArray((res as any)?.students) && (res as any).students.length) ||
-        (typeof (res as any)?.count === 'number' && (res as any).count) ||
-        0
-      notify.success(createdCount > 0 ? `Uploaded ${createdCount} students successfully` : 'Bulk upload submitted successfully')
-      setBulkForm((prev) => ({ ...prev, csv: '' }))
-      setShowBulkUpload(false)
-      const refreshed = await tutorsApi.myClasses().catch(() => null)
-      if (Array.isArray(refreshed)) {
-        onClassesChange(refreshed)
-      }
-    } catch (e: any) {
-      notify.error(e?.message || 'Bulk upload failed')
-    }
-    setSavingBulk(false)
-  }
 
   const filteredClasses = selectedClass ? classes.filter((c: any) => c.className === selectedClass) : classes
   const students = filteredClasses.flatMap((c: any, ci: number) =>
@@ -401,11 +391,158 @@ function TutorStudents({
     })
   ).filter((s: any) => {
     const name = `${s.user?.firstName} ${s.user?.lastName}`.toLowerCase()
-    return !search || name.includes(search.toLowerCase()) || s.regNumber?.includes(search)
+    return (
+      !search ||
+      name.includes(search.toLowerCase()) ||
+      s.regNumber?.includes(search) ||
+      (s.user?.username && String(s.user.username).toLowerCase().includes(search.toLowerCase()))
+    )
   })
+
+  const resetPassword = async (studentId: string) => {
+    setResettingPwByStudentId((prev) => ({ ...prev, [studentId]: true }))
+    try {
+      const res = await studentsApi.resetPassword(studentId)
+      const pw = String(res?.tempPassword || '')
+      if (!pw) throw new Error('No temporary password returned')
+      setTempPwByStudentId((prev) => ({ ...prev, [studentId]: pw }))
+      setRevealPwByStudentId((prev) => ({ ...prev, [studentId]: true }))
+      notify.success('Temporary password generated')
+    } catch (e: any) {
+      notify.fromError(e, 'Could not reset password')
+    }
+    setResettingPwByStudentId((prev) => ({ ...prev, [studentId]: false }))
+  }
+
+  const deactivateStudent = async (studentId: string) => {
+    setConfirm({
+      title: 'Deactivate student?',
+      danger: true,
+      message: 'They will no longer be able to sign in.',
+      onConfirm: async () => {
+        setConfirm(null)
+        try {
+          await studentsApi.deactivate(studentId)
+          notify.success('Student deactivated')
+          onClassesChange((prev) =>
+            prev.map((c: any) => ({
+              ...c,
+              students: (c.students || []).filter((s: any) => s.id !== studentId),
+            }))
+          )
+          setSelectedStudentIds((prev) => {
+            if (!prev[studentId]) return prev
+            const next = { ...prev }
+            delete next[studentId]
+            return next
+          })
+        } catch (e: any) {
+          notify.fromError(e, 'Could not deactivate student')
+        }
+      },
+    })
+    return
+  }
+
+  const editStudentName = async (student: any) => {
+    const current = `${student?.user?.firstName || ''} ${student?.user?.lastName || ''}`.trim()
+    const fullName = window.prompt('Update student full name', current)
+    if (fullName == null) return
+    const cleaned = String(fullName).trim().replace(/\s+/g, ' ')
+    if (!cleaned) {
+      notify.warning('Full name cannot be empty')
+      return
+    }
+    try {
+      await studentsApi.tutorUpdate(student.id, { fullName: cleaned })
+      const parts = cleaned.split(' ')
+      const firstName = parts[0]
+      const lastName = parts.slice(1).join(' ') || 'Student'
+      onClassesChange((prev) =>
+        prev.map((c: any) => ({
+          ...c,
+          students: (c.students || []).map((s: any) =>
+            s.id === student.id
+              ? { ...s, user: { ...(s.user || {}), firstName, lastName } }
+              : s
+          ),
+        }))
+      )
+      notify.success('Student updated')
+    } catch (e: any) {
+      notify.fromError(e, 'Could not update student')
+    }
+  }
+
+  const selectedIds = Object.keys(selectedStudentIds).filter((id) => selectedStudentIds[id])
+
+  const toggleSelected = (studentId: string) => {
+    setSelectedStudentIds((prev) => ({ ...prev, [studentId]: !prev[studentId] }))
+  }
+
+  const setAllSelected = (value: boolean) => {
+    const next: Record<string, boolean> = {}
+    students.forEach((s: any) => { next[s.id] = value })
+    setSelectedStudentIds(next)
+  }
+
+  const bulkDeactivateSelected = async () => {
+    const ids = selectedIds
+    if (!ids.length) return
+    setConfirm({
+      title: `Deactivate ${ids.length} selected student${ids.length === 1 ? '' : 's'}?`,
+      danger: true,
+      message: 'They will no longer be able to sign in.',
+      onConfirm: async () => {
+        setConfirm(null)
+        setBulkDeactivating(true)
+        setBulkDeactivateProgress({ total: ids.length, done: 0, succeeded: 0, failed: 0 })
+        let succeeded = 0
+        let failed = 0
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i]
+          try {
+            await studentsApi.deactivate(id)
+            succeeded++
+            // remove from UI immediately
+            onClassesChange((prev) =>
+              prev.map((c: any) => ({
+                ...c,
+                students: (c.students || []).filter((s: any) => s.id !== id),
+              }))
+            )
+            setSelectedStudentIds((prev) => {
+              if (!prev[id]) return prev
+              const next = { ...prev }
+              delete next[id]
+              return next
+            })
+          } catch {
+            failed++
+          }
+          setBulkDeactivateProgress({ total: ids.length, done: i + 1, succeeded, failed })
+        }
+        if (succeeded > 0) notify.success(`Deactivated ${succeeded} student${succeeded === 1 ? '' : 's'}`)
+        if (failed > 0) notify.warning(`${failed} student${failed === 1 ? '' : 's'} could not be deactivated`)
+        setBulkDeactivating(false)
+        setBulkDeactivateProgress(null)
+      },
+    })
+    return
+  }
 
   return (
     <div>
+      <ConfirmModal
+        open={!!confirm}
+        title={confirm?.title || 'Confirm'}
+        message={confirm?.message || ''}
+        confirmText={confirm?.danger ? 'Yes, deactivate' : 'Confirm'}
+        cancelText="Cancel"
+        danger={!!confirm?.danger}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm?.onConfirm?.()}
+      />
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>My Students</h3>
@@ -417,90 +554,137 @@ function TutorStudents({
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {selectedClass && <button onClick={onBackToClasses} className="btn btn-ghost btn-sm">Back to Classes</button>}
           {selectedClass && <button onClick={onClearClass} className="btn btn-ghost btn-sm">Clear Class Filter</button>}
-          <button onClick={() => setShowAddStudent((v) => !v)} className="btn btn-primary btn-sm">+ Add Student</button>
-          <button onClick={() => setShowBulkUpload((v) => !v)} className="btn btn-ghost btn-sm">📤 Bulk Upload</button>
         </div>
       </div>
-      {showAddStudent && (
-        <div className="card mb-16">
-          <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Add Student</div>
-          <form onSubmit={addStudent} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div><label className="form-label">First Name</label><input className="form-input" required value={studentForm.firstName} onChange={(e) => setStudentForm({ ...studentForm, firstName: e.target.value })} /></div>
-              <div><label className="form-label">Last Name</label><input className="form-input" required value={studentForm.lastName} onChange={(e) => setStudentForm({ ...studentForm, lastName: e.target.value })} /></div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-              <div><label className="form-label">Email</label><input type="email" className="form-input" required value={studentForm.email} onChange={(e) => setStudentForm({ ...studentForm, email: e.target.value })} /></div>
-              <div>
-                <label className="form-label">Class</label>
-                <select
-                  className="form-input"
-                  required
-                  value={studentForm.className}
-                  onChange={(e) => {
-                    const nextClass = e.target.value
-                    setStudentForm((prev) => ({ ...prev, className: nextClass, track: classTrackMap[nextClass] || prev.track }))
-                  }}
-                  style={{ appearance: 'none' }}
-                >
-                  {classOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div><label className="form-label">Track</label><input className="form-input" value={(classTrackMap[studentForm.className] || studentForm.track).replace('TRACK_', 'Track ')} readOnly /></div>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button type="submit" className="btn btn-primary btn-sm" disabled={savingStudent}>{savingStudent ? 'Adding…' : 'Create Student'}</button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAddStudent(false)}>Cancel</button>
-            </div>
-          </form>
-        </div>
-      )}
-      {showBulkUpload && (
-        <div className="card mb-16">
-          <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Bulk Upload Students (CSV)</div>
-          <form onSubmit={bulkUpload} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
-                <label className="form-label">Class</label>
-                <select className="form-input" value={bulkForm.className} onChange={(e) => setBulkForm({ ...bulkForm, className: e.target.value })} style={{ appearance: 'none' }}>
-                  {classOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div><label className="form-label">Term Label</label><input className="form-input" value={bulkForm.termLabel} onChange={(e) => setBulkForm({ ...bulkForm, termLabel: e.target.value })} /></div>
-            </div>
-            <div className="text-muted text-xs">CSV columns: <code>firstName,lastName,email</code> (header optional)</div>
-            <textarea
-              className="form-input"
-              rows={6}
-              placeholder={'firstName,lastName,email\nAisha,Okonkwo,aisha@example.com\nChidi,Uba,chidi@example.com'}
-              value={bulkForm.csv}
-              onChange={(e) => setBulkForm({ ...bulkForm, csv: e.target.value })}
-              style={{ resize: 'vertical' }}
-            />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button type="submit" className="btn btn-primary btn-sm" disabled={savingBulk}>{savingBulk ? 'Uploading…' : 'Upload CSV'}</button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowBulkUpload(false)}>Cancel</button>
-            </div>
-          </form>
-        </div>
-      )}
       <div style={{ marginBottom: 16 }}><input className="form-input" placeholder="Search by name or reg number…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 320 }} /></div>
+      {selectedIds.length > 0 && (
+        <div className="card mb-12" style={{ padding: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="text-muted text-sm">
+            <strong style={{ color: 'var(--white)' }}>{selectedIds.length}</strong> selected
+          </span>
+          <button
+            type="button"
+            className="btn btn-danger btn-sm"
+            disabled={bulkDeactivating}
+            onClick={bulkDeactivateSelected}
+          >
+            {bulkDeactivating && bulkDeactivateProgress
+              ? `Deactivating ${bulkDeactivateProgress.done}/${bulkDeactivateProgress.total}…`
+              : `Deactivate selected (${selectedIds.length})`}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={bulkDeactivating}
+            onClick={() => setAllSelected(false)}
+          >
+            Clear selection
+          </button>
+          {bulkDeactivating && bulkDeactivateProgress && (
+            <span className="text-muted text-xs" style={{ marginLeft: 'auto' }}>
+              <strong style={{ color: 'var(--success)' }}>OK:</strong> {bulkDeactivateProgress.succeeded} ·{' '}
+              <strong style={{ color: 'var(--danger)' }}>Fail:</strong> {bulkDeactivateProgress.failed}
+            </span>
+          )}
+        </div>
+      )}
       <div className="card">
         <table className="data-table">
-          <thead><tr><th>#</th><th>Student</th><th>Reg No.</th><th>Class</th><th>Avg Score</th><th>Status</th></tr></thead>
+          <thead>
+            <tr>
+              <th style={{ width: 28 }}>
+                <input
+                  type="checkbox"
+                  checked={students.length > 0 && selectedIds.length === students.length}
+                  onChange={(e) => setAllSelected(e.target.checked)}
+                  aria-label="Select all students"
+                />
+              </th>
+              <th>#</th><th>Student</th><th>Reg No.</th><th>Class</th><th>Avg Score</th><th>Password</th><th>Status</th><th>Action</th>
+            </tr>
+          </thead>
           <tbody>
-            {students.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted)', padding: '40px 0' }}>No students found</td></tr>}
+            {students.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--muted)', padding: '40px 0' }}>No students found</td></tr>}
             {students.map((s: any, i: number) => {
               const name = `${s.user?.firstName} ${s.user?.lastName}`
               const { background, color } = studentColor(s.colorIdx)
+              const pw = tempPwByStudentId[s.id]
+              const revealing = !!revealPwByStudentId[s.id]
+              const resetting = !!resettingPwByStudentId[s.id]
+              const checked = !!selectedStudentIds[s.id]
               return (
                 <tr key={s.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleSelected(s.id)}
+                      aria-label={`Select ${name}`}
+                    />
+                  </td>
                   <td style={{ color: i < 3 ? 'var(--gold)' : 'var(--muted)' }}>{i < 3 ? ['🥇', '🥈', '🥉'][i] : i + 1}</td>
                   <td><div className="student-name"><div className="stu-av" style={{ background, color }}>{initials(name)}</div>{name}</div></td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{s.regNumber}</td>
                   <td>{s.className}</td>
                   <td><strong style={{ color: s.avg >= 70 ? 'var(--success)' : s.avg >= 50 ? 'var(--warning)' : s.avg > 0 ? 'var(--danger)' : 'var(--muted)' }}>{s.avg > 0 ? `${s.avg}%` : '—'}</strong></td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                    {pw ? (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span>{revealing ? pw : '••••••••'}</span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10, padding: '6px 10px' }}
+                          onClick={() => setRevealPwByStudentId((prev) => ({ ...prev, [s.id]: !prev[s.id] }))}
+                        >
+                          {revealing ? 'Hide' : 'Reveal'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10, padding: '6px 10px' }}
+                          onClick={() =>
+                            navigator.clipboard?.writeText(pw)
+                              .then(() => notify.success('Password copied'))
+                              .catch(() => notify.warning('Could not copy'))
+                          }
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 10, padding: '6px 10px' }}
+                        disabled={resetting}
+                        onClick={() => resetPassword(s.id)}
+                      >
+                        {resetting ? 'Generating…' : 'Generate'}
+                      </button>
+                    )}
+                  </td>
                   <td><span className={`badge badge-${s.avg >= 50 || s.avg === 0 ? 'success' : 'danger'}`}>{s.avg > 0 && s.avg < 50 ? 'At Risk' : 'Active'}</span></td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 10, padding: '6px 10px', marginRight: 8 }}
+                      disabled={bulkDeactivating}
+                      onClick={() => editStudentName(s)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      style={{ fontSize: 10, padding: '6px 10px' }}
+                      disabled={bulkDeactivating}
+                      onClick={() => deactivateStudent(s.id)}
+                    >
+                      Deactivate
+                    </button>
+                  </td>
                 </tr>
               )
             })}
@@ -768,7 +952,13 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
 }
 
 // ─── MARK RESULTS ─────────────────────────────────────────────
-function TutorResults({ classes }: { classes: any[] }) {
+function TutorResults({
+  classes,
+  onRefreshClasses,
+}: {
+  classes: any[]
+  onRefreshClasses?: () => Promise<void>
+}) {
   const [selectedClass, setSelectedClass] = useState(classes[0]?.className || '')
   const students = (classes.find(c => c.className === selectedClass)?.students || [])
   const [scores, setScores] = useState<Record<string, string>>({})
@@ -803,6 +993,25 @@ function TutorResults({ classes }: { classes: any[] }) {
     loadClassProgress()
   }, [selectedClass, loadClassProgress])
 
+  /** Pre-fill inputs from students.moduleProgress for the class “current module” (otherwise everything looks empty). */
+  useEffect(() => {
+    if (loadingProgress) return
+    const mid = classProgress?.currentModule?.id
+    if (!mid) {
+      setScores({})
+      return
+    }
+    const st = (classes.find((c: any) => c.className === selectedClass)?.students || []) as any[]
+    const next: Record<string, string> = {}
+    for (const s of st) {
+      const row = (s.moduleProgress || []).find((p: any) => p.moduleId === mid || p.module?.id === mid)
+      if (row?.score != null && row.score !== '') {
+        next[s.id] = String(Math.round(Number(row.score)))
+      }
+    }
+    setScores(next)
+  }, [loadingProgress, selectedClass, classProgress?.currentModule?.id, classes])
+
   const saveAll = async () => {
     if (!classProgress?.currentModule?.id) {
       notify.warning('No active module set for this class')
@@ -828,6 +1037,14 @@ function TutorResults({ classes }: { classes: any[] }) {
         scores: payloadScores,
       })
       setSaved(true)
+      notify.success('Scores saved')
+      if (onRefreshClasses) {
+        try {
+          await onRefreshClasses()
+        } catch (e: any) {
+          notify.fromError(e, 'Saved, but could not refresh class list')
+        }
+      }
     } catch (e: any) { notify.fromError(e) }
     setSaving(false)
   }
@@ -843,6 +1060,13 @@ function TutorResults({ classes }: { classes: any[] }) {
       })
       setScores({})
       setSaved(false)
+      if (onRefreshClasses) {
+        try {
+          await onRefreshClasses()
+        } catch (e: any) {
+          notify.fromError(e, 'Advanced, but could not refresh class list')
+        }
+      }
       await loadClassProgress()
       notify.success('Class advanced to next module')
     } catch (e: any) {
@@ -857,6 +1081,9 @@ function TutorResults({ classes }: { classes: any[] }) {
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 18 }}>Mark Results</h3>
           <div className="text-muted text-xs mt-4">Class-paced module flow: score individually, advance by class.</div>
+          <div className="text-muted text-xs mt-6" style={{ maxWidth: 520 }}>
+            Saved scores for the current module load into the table. Enter or edit scores (0–100), then <strong className="text-white">Save All Scores</strong>. When the whole class is ready, use <strong className="text-white">Advance Class Module</strong> to move everyone forward.
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <select className="form-input" value={selectedClass} onChange={e => { setSelectedClass(e.target.value); setSaved(false) }} style={{ appearance: 'none', width: 120 }}>
@@ -915,9 +1142,16 @@ function LessonPlans({ classes }: { classes: any[] }) {
     new Map(
       (Array.isArray(classes) ? classes : [])
         .filter((c: any) => c?.className)
-        .map((c: any) => [c.className, { className: c.className, track: c.track || 'TRACK_1' }])
+        .map((c: any) => [
+          c.className,
+          {
+            className: c.className,
+            track: c.track || 'TRACK_1',
+            track3Stack: c.track3Stack as string | undefined,
+          },
+        ])
     ).values()
-  ) as Array<{ className: string; track: string }>
+  ) as Array<{ className: string; track: string; track3Stack?: string }>
   const { data: dynamicTracks } = useQuery({
     queryKey: ['tutor', 'tracks-options'],
     queryFn: () => tracksApi.all(),
@@ -936,6 +1170,8 @@ function LessonPlans({ classes }: { classes: any[] }) {
     className: classOptions[0]?.className || 'SS3A',
     classNames: classOptions.filter((c) => c.track === defaultTrack).map((c) => c.className),
     moduleId: '',
+    /** Optional link to canonical curriculum lesson (same module). */
+    curriculumLessonId: '',
     durationMins: 75,
     venue: 'Computer Lab B',
     scheduledAt: '',
@@ -946,17 +1182,20 @@ function LessonPlans({ classes }: { classes: any[] }) {
   const [showNew, setShowNew] = useState(false)
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
   const [modulesForTrack, setModulesForTrack] = useState<any[]>([])
   const [loadingModules, setLoadingModules] = useState(false)
   const [materialFile, setMaterialFile] = useState<File | null>(null)
   const [attachmentsByPlan, setAttachmentsByPlan] = useState<Record<string, any[]>>({})
+  const [curriculumLessonsPick, setCurriculumLessonsPick] = useState<any[]>([])
+  const curriculumAutoDoneRef = useRef(false)
   const [form, setForm] = useState(buildDefaultForm)
   useEffect(() => {
     if (!trackChoices.length) return
     if (!form.track || !trackChoices.some((t) => t.code === form.track)) {
       const nextTrack = trackChoices[0].code
       const nextClasses = classOptions.filter((c) => c.track === nextTrack).map((c) => c.className)
-      setForm((prev) => ({ ...prev, track: nextTrack, classNames: nextClasses, className: nextClasses[0] || '', moduleId: '' }))
+      setForm((prev) => ({ ...prev, track: nextTrack, classNames: nextClasses, className: nextClasses[0] || '', moduleId: '', curriculumLessonId: '' }))
     }
   }, [JSON.stringify(trackChoices), JSON.stringify(classOptions), form.track])
 
@@ -965,7 +1204,12 @@ function LessonPlans({ classes }: { classes: any[] }) {
       if (!showNew || !form.track) return
       setLoadingModules(true)
       try {
-        const data = await modulesApi.all(form.track)
+        const track3Stack =
+          form.track === 'TRACK_3'
+            ? classOptions.find((c) => c.track === 'TRACK_3' && form.classNames.includes(c.className))
+                ?.track3Stack || 'PYTHON_FLASK'
+            : undefined
+        const data = await modulesApi.all(form.track, track3Stack)
         const list = Array.isArray(data) ? data : []
         setModulesForTrack(list)
         setForm((f: any) => {
@@ -979,7 +1223,101 @@ function LessonPlans({ classes }: { classes: any[] }) {
       setLoadingModules(false)
     }
     loadModules()
-  }, [showNew, form.track])
+  }, [showNew, form.track, form.classNames.join('|'), JSON.stringify(classOptions.map((c) => `${c.className}:${c.track}:${c.track3Stack || ''}`))])
+
+  useEffect(() => {
+    if (!showNew || !form.moduleId) {
+      setCurriculumLessonsPick([])
+      return
+    }
+    let cancelled = false
+    curriculumApi
+      .lessonsByModule(form.moduleId, false)
+      .then((list) => {
+        if (!cancelled) setCurriculumLessonsPick(Array.isArray(list) ? list : [])
+      })
+      .catch(() => {
+        if (!cancelled) setCurriculumLessonsPick([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showNew, form.moduleId])
+
+  /** Auto-link plan to curriculum lesson: class "next lesson" if it matches this module, else first published lesson in module. */
+  useEffect(() => {
+    if (!showNew || editingPlanId || curriculumAutoDoneRef.current) return
+    if (!form.moduleId || curriculumLessonsPick.length === 0) return
+
+    const schoolId =
+      Array.isArray(classes) && classes[0] ? classes[0].schoolId || classes[0].school?.id || '' : ''
+    const firstClassName =
+      form.classNames.find((cn) => {
+        const o = classOptions.find((x) => x.className === cn && x.track === form.track)
+        return !!o
+      }) || form.classNames[0]
+    const applyFirstInModule = () => {
+      const sorted = [...curriculumLessonsPick].sort(
+        (a: any, b: any) => (a.position || 0) - (b.position || 0),
+      )
+      const pick = sorted[0]
+      if (pick?.id) {
+        setForm((f) => ({ ...f, curriculumLessonId: pick.id }))
+        curriculumAutoDoneRef.current = true
+      }
+    }
+
+    if (!schoolId || !firstClassName) {
+      applyFirstInModule()
+      return
+    }
+
+    const co = classOptions.find((x) => x.className === firstClassName && x.track === form.track)
+    if (!co) {
+      applyFirstInModule()
+      return
+    }
+
+    let cancelled = false
+    curriculumApi
+      .classState(schoolId, firstClassName, co.track, co.track3Stack)
+      .then((state) => {
+        if (cancelled || curriculumAutoDoneRef.current) return
+        const cur = state?.currentLesson
+        const mid = form.moduleId
+        if (cur?.module?.id === mid && cur.id) {
+          setForm((f) => ({ ...f, curriculumLessonId: cur.id }))
+          curriculumAutoDoneRef.current = true
+        } else {
+          applyFirstInModule()
+        }
+      })
+      .catch(() => {
+        if (cancelled || curriculumAutoDoneRef.current) return
+        applyFirstInModule()
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    showNew,
+    editingPlanId,
+    form.moduleId,
+    curriculumLessonsPick,
+    form.classNames.join('|'),
+    form.track,
+    JSON.stringify(
+      (classOptions || []).map((c: { className: string; track: string; track3Stack?: string }) =>
+        `${c.className}:${c.track}:${c.track3Stack || ''}`,
+      ),
+    ),
+    JSON.stringify(
+      Array.isArray(classes) && classes[0]
+        ? [classes[0].schoolId || classes[0].school?.id || '']
+        : [],
+    ),
+  ])
+
   const selectedModule = modulesForTrack.find((m: any) => m.id === form.moduleId)
   const generatedTitle = selectedModule ? `Module ${selectedModule.number}: ${selectedModule.title}` : ''
   useEffect(() => {
@@ -1029,6 +1367,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
   }
   const classesForTrack = classOptions.filter((c) => c.track === form.track)
   const toggleClassTarget = (className: string) => {
+    curriculumAutoDoneRef.current = false
     setForm((f: any) => {
       const exists = f.classNames.includes(className)
       const nextClassNames = exists ? f.classNames.filter((c: string) => c !== className) : [...f.classNames, className]
@@ -1074,6 +1413,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
         className: targetClassNames[0],
         classNames: targetClassNames,
         moduleId: form.moduleId,
+        curriculumLessonId: form.curriculumLessonId?.trim() || null,
         title: generatedTitle,
         durationMins: form.durationMins,
         venue: form.venue,
@@ -1104,10 +1444,24 @@ function LessonPlans({ classes }: { classes: any[] }) {
   }
 
   const del = async (id: string) => {
-    if (!confirm('Delete this lesson plan?')) return
-    try { await lessonsApi.delete(id); setPlans(p => p.filter(x => x.id !== id)) } catch (e: any) { notify.fromError(e) }
+    setConfirm({
+      title: 'Delete lesson plan?',
+      danger: true,
+      message: 'This cannot be undone.',
+      onConfirm: async () => {
+        setConfirm(null)
+        try {
+          await lessonsApi.delete(id)
+          setPlans((p: any[]) => p.filter((x: any) => x.id !== id))
+          notify.success('Lesson plan deleted')
+        } catch (e: any) {
+          notify.fromError(e)
+        }
+      },
+    })
   }
   const startEdit = (plan: any) => {
+    curriculumAutoDoneRef.current = true
     const trackFromClass = classOptions.find((c) => c.className === plan.className)?.track || defaultTrack
     const normalizeDate = (v: any) => (v ? new Date(v).toISOString().slice(0, 16) : '')
     const siblingClassNames = plans
@@ -1137,6 +1491,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
       className: plan.className || '',
       classNames: resolvedClassNames,
       moduleId: plan.moduleId || '',
+      curriculumLessonId: plan.curriculumLessonId || '',
       durationMins: plan.durationMins || 75,
       venue: plan.venue || 'Computer Lab B',
       scheduledAt: plan.scheduledAt ? new Date(plan.scheduledAt).toISOString().slice(0, 16) : '',
@@ -1149,6 +1504,16 @@ function LessonPlans({ classes }: { classes: any[] }) {
 
   return (
     <div>
+      <ConfirmModal
+        open={!!confirm}
+        title={confirm?.title || 'Confirm'}
+        message={confirm?.message || ''}
+        confirmText={confirm?.danger ? 'Delete' : 'Confirm'}
+        cancelText="Cancel"
+        danger={!!confirm?.danger}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm?.onConfirm?.()}
+      />
       <div className="flex-between mb-20">
         <div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Lesson Plans</h3><div className="text-muted text-sm">Structured session guides for your classes</div></div>
         <button
@@ -1156,6 +1521,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
             setShowNew((prev) => {
               const next = !prev
               if (next) {
+                curriculumAutoDoneRef.current = false
                 setForm(buildDefaultForm())
                 setMaterialFile(null)
                 setEditingPlanId(null)
@@ -1191,7 +1557,8 @@ function LessonPlans({ classes }: { classes: any[] }) {
                   onChange={e => {
                     const nextTrack = e.target.value
                     const nextClasses = classOptions.filter((c) => c.track === nextTrack).map((c) => c.className)
-                    setForm({ ...form, track: nextTrack, classNames: nextClasses, className: nextClasses[0] || '', moduleId: '', title: '' })
+                    curriculumAutoDoneRef.current = false
+                    setForm({ ...form, track: nextTrack, classNames: nextClasses, className: nextClasses[0] || '', moduleId: '', curriculumLessonId: '', title: '' })
                   }}
                   style={{ appearance: 'none' }}
                 >
@@ -1207,9 +1574,11 @@ function LessonPlans({ classes }: { classes: any[] }) {
                   onChange={e => {
                     const nextModuleId = e.target.value
                     const nextModule = modulesForTrack.find((m: any) => m.id === nextModuleId)
+                    curriculumAutoDoneRef.current = false
                     setForm({
                       ...form,
                       moduleId: nextModuleId,
+                      curriculumLessonId: '',
                       title: nextModule ? `Module ${nextModule.number}: ${nextModule.title}` : '',
                     })
                   }}
@@ -1224,6 +1593,30 @@ function LessonPlans({ classes }: { classes: any[] }) {
               </div>
               <div><label className="form-label">Duration (min)</label><input type="number" className="form-input" value={form.durationMins} onChange={e => setForm({ ...form, durationMins: +e.target.value })} /></div>
             </div>
+            {form.moduleId && (
+              <div>
+                <label className="form-label">Link to curriculum lesson (optional)</label>
+                <select
+                  className="form-input"
+                  value={form.curriculumLessonId || ''}
+                  onChange={(e) => {
+                    curriculumAutoDoneRef.current = true
+                    setForm({ ...form, curriculumLessonId: e.target.value })
+                  }}
+                  style={{ appearance: 'none' }}
+                >
+                  <option value="">— Not linked —</option>
+                  {curriculumLessonsPick.map((L: any) => (
+                    <option key={L.id} value={L.id}>
+                      {L.position}. {L.title}
+                    </option>
+                  ))}
+                </select>
+                <div className="text-muted text-xs mt-6">
+                  Auto-filled when possible: the class’s <strong>next curriculum lesson</strong> (from session history), otherwise the <strong>first published lesson</strong> in this module. Change anytime.
+                </div>
+              </div>
+            )}
             <div>
               <label className="form-label">Target Classes (same track/module)</label>
               <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,220px))',gap:8}}>
@@ -1304,7 +1697,14 @@ function LessonPlans({ classes }: { classes: any[] }) {
                   <button onClick={() => del(plan.id)} className="btn btn-danger btn-sm" style={{ padding: '4px 8px', fontSize: 11 }}>Delete</button>
                 </div>
               </div>
-              <div className="text-muted text-sm mb-12">{plan.className} · {plan.durationMins} minutes · {plan.venue}</div>
+              <div className="text-muted text-sm mb-12">
+                {plan.className} · {plan.durationMins} minutes · {plan.venue}
+                {plan.curriculumLesson?.title && (
+                  <span className="badge badge-teal" style={{ marginLeft: 8, fontSize: 10 }}>
+                    Curriculum: {plan.curriculumLesson.position}. {plan.curriculumLesson.title}
+                  </span>
+                )}
+              </div>
               {Array.isArray(plan.steps) && plan.steps.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, marginBottom: 12 }}>
                   {plan.steps.map((step: any, j: number) => (
@@ -1349,6 +1749,7 @@ function TutorAssignments({ classes }: { classes: any[] }) {
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
   const [materialFile, setMaterialFile] = useState<File | null>(null)
   const [modulesForTrack, setModulesForTrack] = useState<Array<{ value: string; label: string; moduleId: string }>>([])
   const [loadingModules, setLoadingModules] = useState(false)
@@ -1358,10 +1759,15 @@ function TutorAssignments({ classes }: { classes: any[] }) {
         .filter((c: any) => c?.className)
         .map((c: any) => [
           c.className,
-          { className: c.className, track: c.track || 'TRACK_1', schoolId: c.schoolId || c.school?.id || '' },
+          {
+            className: c.className,
+            track: c.track || 'TRACK_1',
+            schoolId: c.schoolId || c.school?.id || '',
+            track3Stack: c.track3Stack as string | undefined,
+          },
         ])
     ).values()
-  ) as Array<{ className: string; track: string; schoolId: string }>
+  ) as Array<{ className: string; track: string; schoolId: string; track3Stack?: string }>
   const { data: dynamicTracks } = useQuery({
     queryKey: ['tutor', 'tracks-options'],
     queryFn: () => tracksApi.all(),
@@ -1404,7 +1810,12 @@ function TutorAssignments({ classes }: { classes: any[] }) {
 
       setLoadingModules(true)
       try {
-        const data = await modulesApi.all(form.track)
+        const track3Stack =
+          form.track === 'TRACK_3'
+            ? classOptions.find((c) => c.track === 'TRACK_3' && form.classNames.includes(c.className))
+                ?.track3Stack || 'PYTHON_FLASK'
+            : undefined
+        const data = await modulesApi.all(form.track, track3Stack)
         const rows = Array.isArray(data) ? data : []
         const options = rows.map((m: any) => ({
           value: String(m.id),
@@ -1423,7 +1834,7 @@ function TutorAssignments({ classes }: { classes: any[] }) {
       setLoadingModules(false)
     }
     loadModules()
-  }, [form.track])
+  }, [form.track, form.classNames.join('|'), JSON.stringify(classOptions.map((c) => `${c.className}:${c.track}:${c.track3Stack || ''}`))])
 
   const loadAssignments = useCallback(async () => {
     setLoading(true)
@@ -1520,17 +1931,35 @@ function TutorAssignments({ classes }: { classes: any[] }) {
   }
 
   const remove = async (id: string) => {
-    if (!confirm('Delete this assignment?')) return
-    try {
-      await assignmentsApi.delete(id)
-      setItems((prev) => prev.filter((x: any) => x.id !== id))
-    } catch (e: any) {
-      notify.error(e?.message || 'Failed to delete assignment')
-    }
+    setConfirm({
+      title: 'Delete assignment?',
+      danger: true,
+      message: 'This cannot be undone.',
+      onConfirm: async () => {
+        setConfirm(null)
+        try {
+          await assignmentsApi.delete(id)
+          setItems((prev) => prev.filter((x: any) => x.id !== id))
+          notify.success('Assignment deleted')
+        } catch (e: any) {
+          notify.error(e?.message || 'Failed to delete assignment')
+        }
+      },
+    })
   }
 
   return (
     <div>
+      <ConfirmModal
+        open={!!confirm}
+        title={confirm?.title || 'Confirm'}
+        message={confirm?.message || ''}
+        confirmText={confirm?.danger ? 'Delete' : 'Confirm'}
+        cancelText="Cancel"
+        danger={!!confirm?.danger}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm?.onConfirm?.()}
+      />
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Assignments</h3>
@@ -1650,6 +2079,7 @@ function TutorPracticals({ classes }: { classes: any[] }) {
   const [submissions, setSubmissions] = useState<any[]>([])
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
   const [grading, setGrading] = useState(false)
+  const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
   const [scoreBySubmission, setScoreBySubmission] = useState<Record<string, string>>({})
   const [feedbackBySubmission, setFeedbackBySubmission] = useState<Record<string, string>>({})
   const [selectedSubmissionIds, setSelectedSubmissionIds] = useState<string[]>([])
@@ -1661,10 +2091,15 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         .filter((c: any) => c?.className)
         .map((c: any) => [
           c.className,
-          { className: c.className, track: c.track || 'TRACK_1', schoolId: c.schoolId || c.school?.id || '' },
+          {
+            className: c.className,
+            track: c.track || 'TRACK_1',
+            schoolId: c.schoolId || c.school?.id || '',
+            track3Stack: c.track3Stack as string | undefined,
+          },
         ])
     ).values()
-  ) as Array<{ className: string; track: string; schoolId: string }>
+  ) as Array<{ className: string; track: string; schoolId: string; track3Stack?: string }>
   const { data: dynamicTracks } = useQuery({
     queryKey: ['tutor', 'tracks-options'],
     queryFn: () => tracksApi.all(),
@@ -1721,7 +2156,12 @@ function TutorPracticals({ classes }: { classes: any[] }) {
       if (!showNew || !form.track) return
       setLoadingModules(true)
       try {
-        const data = await modulesApi.all(form.track)
+        const track3Stack =
+          form.track === 'TRACK_3'
+            ? classOptions.find((c) => c.track === 'TRACK_3' && form.classNames.includes(c.className))
+                ?.track3Stack || 'PYTHON_FLASK'
+            : undefined
+        const data = await modulesApi.all(form.track, track3Stack)
         const list = Array.isArray(data) ? data : []
         setModulesForTrack(list)
         setForm((f: any) => {
@@ -1735,7 +2175,7 @@ function TutorPracticals({ classes }: { classes: any[] }) {
       setLoadingModules(false)
     }
     loadModules()
-  }, [showNew, form.track])
+  }, [showNew, form.track, form.classNames.join('|'), JSON.stringify(classOptions.map((c) => `${c.className}:${c.track}:${c.track3Stack || ''}`))])
 
   const classesForTrack = classOptions.filter((c) => c.track === form.track)
   const toggleClassTarget = (className: string) => {
@@ -1862,23 +2302,40 @@ function TutorPracticals({ classes }: { classes: any[] }) {
       notify.warning('No submissions available to grade')
       return
     }
-    if (!confirm(`Apply bulk score to ${targetCount} submission(s)?`)) return
-    setGrading(true)
-    try {
-      await practicalsApi.bulkGrade(selectedTaskId, {
-        submissionIds: selectedSubmissionIds.length ? selectedSubmissionIds : undefined,
-        totalScore,
-        feedback: bulkFeedback || undefined,
-      })
-      await openTask(selectedTaskId)
-    } catch (e: any) {
-      notify.error(e?.message || 'Failed to bulk grade')
-    }
-    setGrading(false)
+    setConfirm({
+      title: 'Apply bulk score?',
+      message: `Apply this score to ${targetCount} submission(s)?`,
+      onConfirm: async () => {
+        setConfirm(null)
+        setGrading(true)
+        try {
+          await practicalsApi.bulkGrade(selectedTaskId, {
+            submissionIds: selectedSubmissionIds.length ? selectedSubmissionIds : undefined,
+            totalScore,
+            feedback: bulkFeedback || undefined,
+          })
+          await openTask(selectedTaskId)
+          notify.success('Bulk score applied')
+        } catch (e: any) {
+          notify.error(e?.message || 'Failed to bulk grade')
+        }
+        setGrading(false)
+      },
+    })
+    return
   }
 
   return (
     <div>
+      <ConfirmModal
+        open={!!confirm}
+        title={confirm?.title || 'Confirm'}
+        message={confirm?.message || ''}
+        confirmText="Apply"
+        cancelText="Cancel"
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm?.onConfirm?.()}
+      />
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Practical Assessments</h3>
@@ -2147,6 +2604,10 @@ function CBTBuilder({ classes }: { classes: any[] }) {
   const [saved, setSaved] = useState('')
   const [modulesForTrack, setModulesForTrack] = useState<any[]>([])
   const [loadingModules, setLoadingModules] = useState(false)
+  const [aiGenerating, setAiGenerating] = useState(false)
+  const [aiCount, setAiCount] = useState(12)
+  const [aiDifficulty, setAiDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
+  const [aiInclude, setAiInclude] = useState<Record<string, boolean>>({})
   const [form, setForm] = useState({ title: '', track: '', moduleId: '', className: classes[0]?.className || 'SS3A', durationMins: 30, questions: [{ q: '', options: ['', '', '', ''], correct: 0, explanation: '' }] })
   const { data: dynamicTracks } = useQuery({
     queryKey: ['tutor', 'tracks-options'],
@@ -2172,7 +2633,10 @@ function CBTBuilder({ classes }: { classes: any[] }) {
       if (!form.track || view !== 'create') return
       setLoadingModules(true)
       try {
-        const data = await modulesApi.all(form.track)
+        const selectedClass = Array.isArray(classes) ? classes.find((c: any) => c.className === form.className) : null
+        const track3Stack =
+          form.track === 'TRACK_3' ? selectedClass?.track3Stack || 'PYTHON_FLASK' : undefined
+        const data = await modulesApi.all(form.track, track3Stack)
         const list = Array.isArray(data) ? data : []
         setModulesForTrack(list)
         setForm((f: any) => {
@@ -2186,15 +2650,87 @@ function CBTBuilder({ classes }: { classes: any[] }) {
       setLoadingModules(false)
     }
     loadModules()
-  }, [form.track, view])
+  }, [form.track, form.className, view, JSON.stringify(classes.map((c: any) => `${c.className}:${c.track3Stack || ''}`))])
   const selectedModule = modulesForTrack.find((m: any) => m.id === form.moduleId)
-  const generatedTitle = selectedModule ? `Module ${selectedModule.number}: ${selectedModule.title} Assessment` : ''
+  const isExamModule = selectedModule?.moduleType === 'TERM_EXAM'
+  const normalMods = modulesForTrack
+    .filter((m: any) => m.moduleType !== 'TERM_EXAM')
+    .sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
+  const generatedTitle = selectedModule
+    ? isExamModule
+      ? `Term ${selectedModule.termOrdinal || ''} Main CBT Exam — ${String(form.track || '').replace('TRACK_', 'Track ')}`
+      : `Module ${selectedModule.number}: ${selectedModule.title} Assessment`
+    : ''
   useEffect(() => {
     if (view !== 'create') return
     if (form.title !== generatedTitle) {
       setForm((prev) => ({ ...prev, title: generatedTitle }))
     }
   }, [generatedTitle, view])
+
+  // Prefill sensible defaults for term exam modules
+  useEffect(() => {
+    if (view !== 'create') return
+    if (!isExamModule) return
+    setForm((prev: any) => ({
+      ...prev,
+      durationMins: prev.durationMins && prev.durationMins !== 30 ? prev.durationMins : 60,
+      questions:
+        Array.isArray(prev.questions) && prev.questions.length > 1
+          ? prev.questions
+          : [{ q: '', options: ['', '', '', ''], correct: 0, explanation: '' }],
+    }))
+  }, [isExamModule, view, selectedModule?.id])
+
+  // Default module inclusion for AI when term exam is selected
+  useEffect(() => {
+    if (view !== 'create') return
+    if (!isExamModule) {
+      setAiInclude({})
+      return
+    }
+    const next: Record<string, boolean> = {}
+    normalMods.forEach((m: any) => { next[m.id] = true })
+    setAiInclude(next)
+  }, [isExamModule, view, selectedModule?.id, JSON.stringify(normalMods.map((m: any) => m.id))])
+
+  const runAi = async () => {
+    if (!form.moduleId) {
+      notify.warning('Select a module first')
+      return
+    }
+    setAiGenerating(true)
+    try {
+      const includeModuleIds = isExamModule
+        ? Object.entries(aiInclude).filter(([, v]) => v).map(([k]) => k)
+        : undefined
+      const res = await cbtApi.generateQuestions({
+        moduleId: form.moduleId,
+        includeModuleIds,
+        count: Math.max(1, Math.min(60, Number(aiCount) || 12)),
+        difficulty: aiDifficulty,
+      })
+      const qs = Array.isArray(res?.questions) ? res.questions : []
+      if (!qs.length) {
+        notify.warning('No questions generated')
+      } else {
+        setForm((f: any) => ({
+          ...f,
+          questions: qs.map((q: any) => ({
+            q: q.questionText || '',
+            options: Array.isArray(q.options) ? q.options : ['', '', '', ''],
+            correct: typeof q.correctIndex === 'number' ? q.correctIndex : 0,
+            explanation: q.explanation || '',
+          })),
+        }))
+        const model = res?.modelUsed ? String(res.modelUsed).replace(/^models\//, '') : ''
+        notify.success(`Generated ${qs.length} questions${model ? ` (model: ${model})` : ''}`)
+      }
+    } catch (e: any) {
+      notify.fromError(e, 'AI generation failed')
+    }
+    setAiGenerating(false)
+  }
 
   const addQ = () => setForm(f => ({ ...f, questions: [...f.questions, { q: '', options: ['', '', '', ''], correct: 0, explanation: '' }] }))
   const removeQ = (i: number) => setForm(f => ({ ...f, questions: f.questions.filter((_, j) => j !== i) }))
@@ -2210,7 +2746,7 @@ function CBTBuilder({ classes }: { classes: any[] }) {
         return
       }
       const newExam = await cbtApi.create({
-        title: generatedTitle,
+        title: form.title || generatedTitle,
         moduleId: form.moduleId,
         track: form.track,
         durationMins: form.durationMins,
@@ -2253,13 +2789,68 @@ function CBTBuilder({ classes }: { classes: any[] }) {
                 disabled={loadingModules}
               >
                 <option value="">{loadingModules ? 'Loading modules…' : 'Select module…'}</option>
-                {modulesForTrack.map((m: any) => (
-                  <option key={m.id} value={m.id}>{`Module ${m.number}: ${m.title}`}</option>
-                ))}
+                {(() => {
+                  const examMods = modulesForTrack.filter((m: any) => m.moduleType === 'TERM_EXAM').sort((a: any, b: any) => (a.termOrdinal || 0) - (b.termOrdinal || 0))
+                  const normalMods = modulesForTrack.filter((m: any) => m.moduleType !== 'TERM_EXAM').sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
+                  return (
+                    <>
+                      {examMods.length > 0 && (
+                        <optgroup label="Term Exams">
+                          {examMods.map((m: any) => (
+                            <option key={m.id} value={m.id}>{`Term ${m.termOrdinal}: ${m.title}`}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="Modules">
+                        {normalMods.map((m: any) => (
+                          <option key={m.id} value={m.id}>{`Module ${m.number}: ${m.title}`}</option>
+                        ))}
+                      </optgroup>
+                    </>
+                  )
+                })()}
               </select>
             </div>
             <div><label className="form-label">Duration (min)</label><input type="number" className="form-input" min={5} max={120} value={form.durationMins} onChange={e => setForm({ ...form, durationMins: +e.target.value })} /></div>
           </div>
+          <div className="mt-14" style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr auto', gap: 12, alignItems: 'end' }}>
+            <div>
+              <label className="form-label">AI difficulty</label>
+              <select className="form-input" value={aiDifficulty} onChange={(e) => setAiDifficulty(e.target.value as any)} style={{ appearance: 'none' }}>
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+            <div>
+              <label className="form-label">AI questions</label>
+              <input className="form-input" type="number" min={1} max={60} value={aiCount} onChange={(e) => setAiCount(Number(e.target.value) || 10)} />
+            </div>
+            <div className="text-muted text-xs" style={{ lineHeight: 1.4 }}>
+              Uses Google Gemini to draft questions from module objectives + published curriculum lessons.
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={runAi} disabled={aiGenerating || !form.moduleId}>
+              {aiGenerating ? 'Generating…' : 'Generate with AI'}
+            </button>
+          </div>
+          {isExamModule && normalMods.length > 0 && (
+            <div className="mt-12" style={{ borderTop: '1px solid var(--border2)', paddingTop: 12 }}>
+              <div className="text-muted text-xs mb-8">Exam module: select which modules to include for AI generation.</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 8 }}>
+                {normalMods.map((m: any) => (
+                  <label key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 10px', border: '1px solid var(--border2)', borderRadius: 8, background: 'var(--muted3)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={aiInclude[m.id] !== false}
+                      onChange={() => setAiInclude((prev) => ({ ...prev, [m.id]: !(prev[m.id] !== false) }))}
+                      style={{ accentColor: 'var(--teal)' }}
+                    />
+                    <span style={{ fontSize: 12, color: 'var(--white)' }}>{`Mod ${m.number}: ${m.title}`}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         {form.questions.map((q, qi) => (
           <div key={qi} className="question-block" style={{ marginBottom: 12 }}>
@@ -2322,7 +2913,15 @@ function WeeklyReport({ classes, tutorId }: { classes: any[]; tutorId: string })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => { reportsApi.mine().then(d => setPast(Array.isArray(d) ? d : [])).catch(() => {}) }, [])
+  useEffect(() => {
+    reportsApi
+      .mine()
+      .then((d) => setPast(Array.isArray(d) ? d : []))
+      .catch((e) => {
+        notify.fromError(e, 'Could not load reports')
+        setPast([])
+      })
+  }, [])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true)
@@ -2633,19 +3232,49 @@ function SessionLogger({ classes }: { classes: any[] }) {
   const [history, setHistory] = useState<any[]>([])
   const [modules, setModules] = useState<any[]>([])
   const [modulePick, setModulePick] = useState<Record<string, string>>({})
+  const [lessonPick, setLessonPick] = useState<Record<string, string>>({})
+  const [lessonsByModule, setLessonsByModule] = useState<Record<string, any[]>>({})
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const timerRef = useRef<any>(null)
 
   useEffect(() => {
-    modulesApi.all().then((d) => setModules(Array.isArray(d) ? d : [])).catch(() => setModules([]))
+    modulesApi
+      .all()
+      .then((d) => setModules(Array.isArray(d) ? d : []))
+      .catch((e) => {
+        notify.fromError(e, 'Could not load modules')
+        setModules([])
+      })
   }, [])
+
+  const loadedLessonModules = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const mids = Array.from(new Set(Object.values(modulePick).filter(Boolean))) as string[]
+    for (const mid of mids) {
+      if (loadedLessonModules.current.has(mid)) continue
+      loadedLessonModules.current.add(mid)
+      curriculumApi
+        .lessonsByModule(mid, false)
+        .then((list) => {
+          setLessonsByModule((prev) => ({ ...prev, [mid]: Array.isArray(list) ? list : [] }))
+        })
+        .catch(() => {
+          setLessonsByModule((prev) => ({ ...prev, [mid]: [] }))
+        })
+    }
+  }, [modulePick])
 
   useEffect(() => {
     Promise.all([sessionsApi.active(), sessionsApi.myHistory()])
       .then(([a, h]) => { setActive(a?.id ? a : null); setHistory(Array.isArray(h) ? h : []) })
-      .catch(() => {}).finally(() => setLoading(false))
+      .catch((e) => {
+        notify.fromError(e, 'Could not load session history')
+        setActive(null)
+        setHistory([])
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => {
@@ -2668,6 +3297,13 @@ function SessionLogger({ classes }: { classes: any[] }) {
     const track = assignment.track
     const tutorAssignmentId = assignment.id
     const moduleId = modulePick[tutorAssignmentId]?.trim() || undefined
+    const lessons = moduleId ? lessonsByModule[moduleId] : undefined
+    const hasPublished = lessons && lessons.length > 0
+    const lessonId = lessonPick[tutorAssignmentId]?.trim() || undefined
+    if (hasPublished && !lessonId) {
+      notify.warning('This module has published curriculum lessons — select which lesson you are delivering.')
+      return
+    }
     setStarting(true)
     try {
       const s = await sessionsApi.start({
@@ -2676,6 +3312,7 @@ function SessionLogger({ classes }: { classes: any[] }) {
         track,
         tutorAssignmentId,
         moduleId,
+        lessonId,
       })
       setActive(s)
     } catch (e: any) { notify.fromError(e) }
@@ -2685,7 +3322,14 @@ function SessionLogger({ classes }: { classes: any[] }) {
   const endSession = async (notes?: string) => {
     if (!active) return
     try {
-      await sessionsApi.end(active.id, notes)
+      const raw = window.prompt('How many students were present in this session?', '')
+      const n = raw == null ? null : Number(raw)
+      if (n == null) return
+      if (!Number.isFinite(n) || n < 0) {
+        notify.warning('Enter a valid number of students present')
+        return
+      }
+      await sessionsApi.end(active.id, Math.floor(n), notes)
       setActive(null)
       const h = await sessionsApi.myHistory().catch(() => [])
       setHistory(Array.isArray(h) ? h : [])
@@ -2694,7 +3338,7 @@ function SessionLogger({ classes }: { classes: any[] }) {
 
   return (
     <div>
-      <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Session Log</h3><div className="text-muted text-sm">Start a session for each class — tied to your school assignment; optionally tag the <strong>module</strong> you’re focusing on (for payroll and HQ reports). Student progress still lives in Modules / Results.</div></div></div>
+      <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Session Log</h3><div className="text-muted text-sm">Start a session for each class — tied to your school assignment. When a module has <strong>published curriculum lessons</strong>, you must pick the lesson you are delivering. Sessions anchor delivery and advance the class together.</div></div></div>
       {active ? (
         <div style={{ background: 'linear-gradient(135deg,rgba(34,197,94,0.12),rgba(26,127,212,0.08))', border: '1px solid rgba(34,197,94,0.35)', borderRadius: 'var(--radius-lg)', padding: 28, marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
@@ -2703,6 +3347,9 @@ function SessionLogger({ classes }: { classes: any[] }) {
               <div className="font-display fw-700 text-white" style={{ fontSize: 18 }}>Session in progress — {active.className}</div>
               {active.module?.title && (
                 <div className="text-muted text-sm mt-6">Module: <span style={{ color: 'var(--white)' }}>Mod {active.module.number}: {active.module.title}</span></div>
+              )}
+              {active.lesson?.title && (
+                <div className="text-muted text-sm mt-6">Curriculum lesson: <span style={{ color: 'var(--white)' }}>{active.lesson.title}</span></div>
               )}
               <div className="text-muted text-sm mt-4">Started {new Date(active.startedAt).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })} · {elapsed} min elapsed</div>
             </div>
@@ -2751,7 +3398,11 @@ function SessionLogger({ classes }: { classes: any[] }) {
                     className="form-input"
                     style={{ fontSize: 13 }}
                     value={modulePick[c.id] || ''}
-                    onChange={(e) => setModulePick((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setModulePick((prev) => ({ ...prev, [c.id]: v }))
+                      setLessonPick((prev) => ({ ...prev, [c.id]: '' }))
+                    }}
                   >
                     <option value="">— Not specified —</option>
                     {modulesForTrack(c.track).map((m: any) => (
@@ -2761,6 +3412,29 @@ function SessionLogger({ classes }: { classes: any[] }) {
                     ))}
                   </select>
                 </div>
+                {(() => {
+                  const mid = modulePick[c.id]?.trim()
+                  const list = mid ? lessonsByModule[mid] : undefined
+                  if (!mid || !list || list.length === 0) return null
+                  return (
+                    <div>
+                      <label className="form-label" style={{ fontSize: 11 }}>Curriculum lesson (required)</label>
+                      <select
+                        className="form-input"
+                        style={{ fontSize: 13 }}
+                        value={lessonPick[c.id] || ''}
+                        onChange={(e) => setLessonPick((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                      >
+                        <option value="">— Select lesson —</option>
+                        {list.map((L: any) => (
+                          <option key={L.id} value={L.id}>
+                            {L.position}. {L.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )
+                })()}
                 <button type="button" onClick={() => startSession(c)} className="btn btn-primary btn-sm" disabled={starting}>
                   Start session
                 </button>
@@ -2774,56 +3448,24 @@ function SessionLogger({ classes }: { classes: any[] }) {
         <div className="font-display fw-600 text-white mb-16" style={{ fontSize: 15 }}>Session History</div>
         {loading ? <p className="text-muted text-sm">Loading…</p> : (
           <table className="data-table">
-            <thead><tr><th>Class</th><th>School</th><th>Module</th><th>Started</th><th>Duration</th><th>Attendance</th></tr></thead>
+            <thead><tr><th>Class</th><th>School</th><th>Module</th><th>Lesson</th><th>Started</th><th>Duration</th><th>Attendance</th></tr></thead>
             <tbody>
               {history.map((s: any, i: number) => (
                 <tr key={s.id || i}>
                   <td style={{ fontWeight: 600, color: 'var(--white)' }}>{s.className}</td>
                   <td style={{ fontSize: 12 }}>{s.school?.name}</td>
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{s.module ? `Mod ${s.module.number}: ${s.module.title}` : '—'}</td>
+                  <td style={{ fontSize: 12, color: 'var(--muted)' }}>{s.lesson?.title || '—'}</td>
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{new Date(s.startedAt).toLocaleDateString('en-NG', { weekday: 'short', month: 'short', day: 'numeric' })} {new Date(s.startedAt).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })}</td>
                   <td>{s.durationMins ? `${s.durationMins} min` : '—'}</td>
                   <td><span className={`badge badge-${s.attendanceMarked ? 'success' : 'warning'}`}>{s.attendanceMarked ? 'Marked' : 'Pending'}</span></td>
                 </tr>
               ))}
-              {history.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No sessions logged yet</td></tr>}
+              {history.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No sessions logged yet</td></tr>}
             </tbody>
           </table>
         )}
       </div>
-    </div>
-  )
-}
-
-// ─── MY PAYROLL ───────────────────────────────────────────────
-function TutorPayrollView() {
-  const [data, setData] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  useEffect(() => { payrollApi.mine().then(d => setData(Array.isArray(d) ? d : [])).catch(() => setData([])).finally(() => setLoading(false)) }, [])
-  const MONTHS = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  return (
-    <div>
-      <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>My Payroll</h3><div className="text-muted text-sm">Monthly payroll calculated by AdharaEdu based on sessions taught</div></div></div>
-      {loading ? <p className="text-muted text-sm" style={{ padding: 20 }}>Loading…</p> : (
-        <div className="card">
-          <table className="data-table">
-            <thead><tr><th>School</th><th>Period</th><th>Sessions</th><th>Rate/Session</th><th>Total</th><th>Status</th></tr></thead>
-            <tbody>
-              {data.map((p: any) => (
-                <tr key={p.id}>
-                  <td style={{ fontWeight: 600, color: 'var(--white)' }}>{p.school?.name}</td>
-                  <td>{MONTHS[p.month]} {p.year}</td>
-                  <td>{p.sessionsTaught}</td>
-                  <td>₦{(p.ratePerSession||0).toLocaleString()}</td>
-                  <td><strong style={{ color: 'var(--gold)' }}>₦{(p.totalAmount||0).toLocaleString()}</strong></td>
-                  <td><span className={`badge badge-${p.isPaid ? 'success' : 'warning'}`}>{p.isPaid ? `Paid ${new Date(p.paidAt).toLocaleDateString('en-NG', { month: 'short', day: 'numeric' })}` : 'Pending'}</span></td>
-                </tr>
-              ))}
-              {data.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No payroll records yet. AdharaEdu calculates based on logged sessions.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   )
 }
@@ -2840,8 +3482,19 @@ function TutorExamScheduler({ classes }: { classes: any[] }) {
     scheduledAt: '',
     venue: 'Computer Lab B',
     durationMins: 60,
+    /** When true, students see “submitted” but not score until tutor clicks Release. */
+    awaitTutorResultRelease: false,
   })
+  const [releasingId, setReleasingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [editing, setEditing] = useState<any | null>(null)
+  const [editForm, setEditForm] = useState<{ scheduledAt: string; venue: string; durationMins: number }>({
+    scheduledAt: '',
+    venue: 'Computer Lab B',
+    durationMins: 60,
+  })
+  const [editBusy, setEditBusy] = useState(false)
+  const [confirmCancel, setConfirmCancel] = useState<any | null>(null)
   const selectedExam = exams.find((e: any) => e.id === form.cbtExamId)
   const targetClasses = selectedExam?.track
     ? classes.filter((c: any) => c.track === selectedExam.track)
@@ -2880,13 +3533,130 @@ function TutorExamScheduler({ classes }: { classes: any[] }) {
       })
       const next = Array.isArray(s) ? s : [s]
       setSchedules(prev => [...next, ...prev])
-      setForm(f => ({ ...f, cbtExamId: '', classNames: [], scheduledAt: '' }))
+      setForm(f => ({ ...f, cbtExamId: '', classNames: [], scheduledAt: '', awaitTutorResultRelease: false }))
     } catch (e: any) { notify.fromError(e) }
     setSaving(false)
   }
 
+  const openEdit = (row: any) => {
+    const dt = row?.scheduledAt ? new Date(row.scheduledAt) : null
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const local =
+      dt && Number.isFinite(dt.getTime())
+        ? `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`
+        : ''
+    setEditing(row)
+    setEditForm({
+      scheduledAt: local,
+      venue: String(row?.venue || ''),
+      durationMins: Number(row?.durationMins || 60),
+    })
+  }
+
+  const saveEdit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editing?.id) return
+    setEditBusy(true)
+    try {
+      const updated = await examSchedulesApi.update(editing.id, {
+        scheduledAt: editForm.scheduledAt,
+        venue: editForm.venue,
+        durationMins: Number(editForm.durationMins) || 30,
+      })
+      setSchedules((prev) => prev.map((x) => (x.id === editing.id ? { ...x, ...updated } : x)))
+      notify.success('Schedule updated')
+      setEditing(null)
+    } catch (err: any) {
+      notify.fromError(err, 'Could not update schedule')
+    }
+    setEditBusy(false)
+  }
+
+  const releaseScheduleResults = async (id: string) => {
+    setReleasingId(id)
+    try {
+      const updated = await examSchedulesApi.releaseResults(id)
+      setSchedules((prev) => prev.map((x) => (x.id === id ? { ...x, ...updated } : x)))
+      notify.success('Students can now view their scores for this schedule.')
+    } catch (err: any) {
+      notify.fromError(err, 'Could not release results')
+    }
+    setReleasingId(null)
+  }
+
+  const cancelSchedule = async (id: string) => {
+    setEditBusy(true)
+    try {
+      await examSchedulesApi.cancel(id)
+      setSchedules((prev) => prev.map((x) => (x.id === id ? { ...x, status: 'CANCELLED' } : x)))
+      notify.success('Schedule cancelled')
+    } catch (err: any) {
+      notify.fromError(err, 'Could not cancel schedule')
+    }
+    setEditBusy(false)
+  }
+
   return (
     <div>
+      <Modal open={!!editing} onClose={() => (editBusy ? null : setEditing(null))} title="Edit exam schedule">
+        <form onSubmit={saveEdit} style={{ display: 'grid', gap: 12 }}>
+          <div>
+            <label className="form-label">Date & Time</label>
+            <input
+              type="datetime-local"
+              className="form-input"
+              required
+              value={editForm.scheduledAt}
+              onChange={(e) => setEditForm((f) => ({ ...f, scheduledAt: e.target.value }))}
+              disabled={editBusy}
+            />
+          </div>
+          <div>
+            <label className="form-label">Venue</label>
+            <input
+              className="form-input"
+              value={editForm.venue}
+              onChange={(e) => setEditForm((f) => ({ ...f, venue: e.target.value }))}
+              disabled={editBusy}
+            />
+          </div>
+          <div>
+            <label className="form-label">Duration (min)</label>
+            <input
+              type="number"
+              className="form-input"
+              value={editForm.durationMins}
+              onChange={(e) => setEditForm((f) => ({ ...f, durationMins: Number(e.target.value) }))}
+              disabled={editBusy}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(null)} disabled={editBusy}>
+              Close
+            </button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={editBusy} style={{ minWidth: 140, justifyContent: 'center' }}>
+              {editBusy ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <ConfirmModal
+        open={!!confirmCancel}
+        title="Cancel schedule?"
+        message="This will cancel the exam schedule for the selected class. Students will no longer be able to enter from the schedule."
+        confirmText="Cancel schedule"
+        cancelText="Keep"
+        danger
+        busy={editBusy}
+        onClose={() => setConfirmCancel(null)}
+        onConfirm={() => {
+          const id = confirmCancel?.id
+          setConfirmCancel(null)
+          if (id) void cancelSchedule(id)
+        }}
+      />
+
       <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Schedule Exams</h3><div className="text-muted text-sm">Assign one approved CBT exam to one or multiple classes on the same track</div></div></div>
       <div className="card mb-20">
         <div className="font-display fw-600 text-white mb-16" style={{ fontSize: 15 }}>Create Schedule</div>
@@ -2916,7 +3686,29 @@ function TutorExamScheduler({ classes }: { classes: any[] }) {
           <div><label className="form-label">Date & Time</label><input type="datetime-local" className="form-input" required value={form.scheduledAt} onChange={e => setForm({ ...form, scheduledAt: e.target.value })} /></div>
           <div><label className="form-label">Venue</label><input className="form-input" value={form.venue} onChange={e => setForm({ ...form, venue: e.target.value })} /></div>
           <div><label className="form-label">Duration (min)</label><input type="number" className="form-input" value={form.durationMins} onChange={e => setForm({ ...form, durationMins: +e.target.value })} /></div>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}><button type="submit" className="btn btn-primary btn-sm" style={{ width: '100%' }} disabled={saving}>{saving ? 'Scheduling…' : 'Schedule Exam →'}</button></div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={form.awaitTutorResultRelease}
+                onChange={(e) => setForm({ ...form, awaitTutorResultRelease: e.target.checked })}
+                style={{ marginTop: 3, accentColor: 'var(--teal)' }}
+              />
+              <span className="text-muted text-sm" style={{ lineHeight: 1.45 }}>
+                Hold results until I release them (students see “submitted” only — for official exams). Leave off for immediate scores.
+              </span>
+            </label>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              style={{ width: '100%', justifyContent: 'center' }}
+              disabled={saving}
+            >
+              {saving ? 'Scheduling…' : 'Schedule Exam →'}
+            </button>
+          </div>
         </form>
         {exams.filter((e: any) => e.isVetted || e.isPublished).length === 0 && <div style={{ marginTop: 14, padding: '10px 14px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, fontSize: 13, color: '#FCD34D' }}>⚠️ You need at least one approved CBT exam before scheduling. Create one in CBT Builder.</div>}
       </div>
@@ -2924,7 +3716,7 @@ function TutorExamScheduler({ classes }: { classes: any[] }) {
         <div className="card">
           <div className="font-display fw-600 text-white mb-16">Scheduled Exams</div>
           <table className="data-table">
-            <thead><tr><th>Exam</th><th>Class</th><th>Date & Time</th><th>Venue</th><th>Status</th></tr></thead>
+            <thead><tr><th>Exam</th><th>Class</th><th>Date & Time</th><th>Venue</th><th>Status</th><th>Scores</th><th>Action</th></tr></thead>
             <tbody>
               {schedules.map((s: any) => (
                 <tr key={s.id}>
@@ -2932,10 +3724,54 @@ function TutorExamScheduler({ classes }: { classes: any[] }) {
                   <td>{s.className}</td>
                   <td style={{ fontSize: 12 }}>{new Date(s.scheduledAt).toLocaleDateString('en-NG', { weekday: 'short', month: 'short', day: 'numeric' })} {new Date(s.scheduledAt).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })}</td>
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{s.venue}</td>
-                  <td><span className={`badge badge-${s.status === 'SCHEDULED' ? 'info' : s.status === 'CANCELLED' ? 'danger' : 'success'}`}>{s.status}</span></td>
+                  <td>
+                    {(() => {
+                      if (s.status === 'CANCELLED') return <span className="badge badge-danger">CANCELLED</span>
+                      const sched = new Date(s.scheduledAt).getTime()
+                      const duration = Number(s.durationMins || s.cbtExam?.durationMins || 30)
+                      const openAt = sched
+                      const closeAt = sched + duration * 60 * 1000 + 15 * 60 * 1000
+                      const now = Date.now()
+                      if (now < openAt) return <span className="badge badge-info">SCHEDULED</span>
+                      if (now > closeAt) return <span className="badge badge-warning">CLOSED</span>
+                      return <span className="badge badge-success">OPEN</span>
+                    })()}
+                  </td>
+                  <td style={{ fontSize: 11, maxWidth: 140 }}>
+                    {!s.awaitTutorResultRelease ? (
+                      <span className="text-muted">Immediate</span>
+                    ) : s.resultsReleasedAt ? (
+                      <span className="badge badge-success">Released</span>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                        <span className="badge badge-warning">Held</span>
+                        {s.status !== 'CANCELLED' && (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: 10, padding: '4px 8px' }}
+                            disabled={!!releasingId}
+                            onClick={() => void releaseScheduleResults(s.id)}
+                          >
+                            {releasingId === s.id ? '…' : 'Release'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => openEdit(s)} disabled={editBusy}>
+                        Edit
+                      </button>
+                      <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--danger)' }} onClick={() => setConfirmCancel(s)} disabled={editBusy || s.status === 'CANCELLED'}>
+                        Cancel
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
-              {schedules.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No exams scheduled yet</td></tr>}
+              {schedules.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No exams scheduled yet</td></tr>}
             </tbody>
           </table>
         </div>
@@ -2972,25 +3808,7 @@ export default function TutorDashboard() {
           setLoading(false)
           return
         }
-        const [s, c] = await Promise.all([tutorsApi.myStats(), tutorsApi.myClasses()])
-        const backendClasses = Array.isArray(c) ? c : []
-        const schoolIds = Array.from(new Set(backendClasses.map((x: any) => x.schoolId || x.school?.id).filter(Boolean)))
-        const savedClassArrays = await Promise.all(schoolIds.map((schoolId) => schoolClassesApi.all(schoolId).catch(() => [])))
-        const savedClasses = savedClassArrays.flat().map((sc: any) => ({
-          id: sc.id || `school-class-${sc.className}`,
-          className: sc.className,
-          track: sc.track,
-          schoolId: sc.schoolId,
-          school: backendClasses.find((b: any) => (b.schoolId || b.school?.id) === sc.schoolId)?.school || null,
-          students: [],
-        }))
-        const merged = [...backendClasses]
-        savedClasses.forEach((m: any) => {
-          if (!m?.className) return
-          if (!merged.some((x: any) => x.className === m.className && (x.schoolId || x.school?.id) === m.schoolId)) {
-            merged.push(m)
-          }
-        })
+        const [s, merged] = await Promise.all([tutorsApi.myStats(), fetchMergedTutorClasses()])
         setTutor(t); setStats(s); setClasses(merged)
       } catch (e) {
         // Auth failed
@@ -3007,7 +3825,7 @@ export default function TutorDashboard() {
     'tutor-assignments': 'Assignments',
     'tutor-practicals': 'Practical Assessments',
     'tutor-lessons': 'Lesson Plans', 'tutor-messages': 'Messages',
-    'tutor-cbt': 'CBT Builder', 'tutor-report': 'Weekly Report', 'tutor-settings': 'My profile', 'tutor-sessions': 'Session Log', 'tutor-payroll': 'My Payroll', 'tutor-exam-schedule': 'Schedule Exams',
+    'tutor-cbt': 'CBT Builder', 'tutor-report': 'Weekly Report', 'tutor-settings': 'My profile', 'tutor-sessions': 'Session Log', 'tutor-exam-schedule': 'Schedule Exams',
     'class-insights': 'Class performance',
   }
 
@@ -3076,7 +3894,16 @@ export default function TutorDashboard() {
           />
         )
       case 'tutor-attendance': return <TutorAttendance classes={classes} tutorId={tutorId} />
-      case 'tutor-results': return <TutorResults classes={classes} />
+      case 'tutor-results':
+        return (
+          <TutorResults
+            classes={classes}
+            onRefreshClasses={async () => {
+              const merged = await fetchMergedTutorClasses()
+              setClasses(merged)
+            }}
+          />
+        )
       case 'tutor-assignments': return <TutorAssignments classes={classes} />
       case 'tutor-practicals': return <TutorPracticals classes={classes} />
       case 'tutor-lessons': return <LessonPlans classes={classes} />
@@ -3093,7 +3920,6 @@ export default function TutorDashboard() {
         />
       )
       case 'tutor-sessions': return <SessionLogger classes={classes} />
-      case 'tutor-payroll': return <TutorPayrollView />
       case 'tutor-exam-schedule': return <TutorExamScheduler classes={classes} />
       case 'class-insights':
         return (

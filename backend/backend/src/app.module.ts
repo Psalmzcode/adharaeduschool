@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TutorOnboardingModule } from './auth/tutor-onboarding.module';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
 import { EmailModule } from './email/email.module';
 import { AuthModule } from './auth/auth.module';
@@ -31,12 +32,14 @@ import { SchoolClassesModule } from './school-classes/school-classes.module';
 import { TracksModule } from './tracks/tracks.module';
 import { PracticalsModule } from './practicals/practicals.module';
 import { ClassPerformanceModule } from './class-performance/class-performance.module';
+import { RemindersModule } from './reminders/reminders.module';
 
 @Module({
   imports: [
     TutorOnboardingModule,
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 200 }]),
+    ScheduleModule.forRoot(),
     PrismaModule,
     EmailModule,           // Global — available everywhere
     AuthModule, UsersModule, SchoolsModule, StudentsModule, TutorsModule,
@@ -48,6 +51,7 @@ import { ClassPerformanceModule } from './class-performance/class-performance.mo
     TracksModule,
     PracticalsModule,
     ClassPerformanceModule,
+    RemindersModule,
   ],
 })
 export class AppModule {}

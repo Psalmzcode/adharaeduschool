@@ -85,10 +85,25 @@ npm run start:dev
 ```bash
 cd adharaedu-final
 npm install
-echo "NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1" > .env.local
+echo "NEXT_PUBLIC_API_URL=http://localhost:3002/api/v1" > .env.local
 npm run dev
 # http://localhost:3000
 ```
+
+### Deploy frontend on Vercel
+
+1. Push this repo to GitHub and open [Vercel](https://vercel.com) → **Add New Project** → import the repository.
+2. Set **Root Directory** to `frontend` (monorepo).
+3. Framework: Next.js (auto-detected). Package manager: **pnpm** (lockfile in `frontend`).
+4. **Environment variables** (Production — and Preview if you want PR previews to hit a real API):
+
+   | Name | Example |
+   |------|---------|
+   | `NEXT_PUBLIC_API_URL` | `https://your-backend-host.com/api/v1` |
+
+   Use the public URL of your Nest API (for example the same app deployed on [Render](https://render.com) per `render.yaml` in the repo root). Redeploy after changing env vars.
+
+5. On the **backend**, set `FRONTEND_URL` to your Vercel production URL (e.g. `https://adharaedu.vercel.app`). You can list multiple origins separated by commas. Preview URLs `https://*.vercel.app` are allowed by default for CORS; set `CORS_ALLOW_VERCEL_PREVIEW=false` on the API if you want to allow only listed origins.
 
 ## Environment Variables
 

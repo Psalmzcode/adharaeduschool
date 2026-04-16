@@ -114,11 +114,12 @@ export class ClassAssignmentsService {
   async submit(assignmentId: string, studentId: string, data: { textBody?: string; fileUrl?: string }) {
     const assignment = await this.prisma.classAssignment.findUnique({ where: { id: assignmentId } });
     if (!assignment) throw new NotFoundException('Assignment not found');
+    const student = await this.prisma.student.findUnique({ where: { id: studentId }, select: { termLabel: true } });
     const isLate = new Date() > new Date(assignment.dueDate);
     return this.prisma.classAssignmentSubmission.upsert({
       where: { assignmentId_studentId: { assignmentId, studentId } },
-      create: { assignmentId, studentId, ...data, status: isLate ? 'LATE' : 'SUBMITTED' },
-      update: { ...data, status: isLate ? 'LATE' : 'SUBMITTED', submittedAt: new Date() },
+      create: { assignmentId, studentId, ...data, status: isLate ? 'LATE' : 'SUBMITTED', termLabel: student?.termLabel || null },
+      update: { ...data, status: isLate ? 'LATE' : 'SUBMITTED', submittedAt: new Date(), termLabel: student?.termLabel || null },
     });
   }
 

@@ -1,5 +1,6 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { Suspense, useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { cbtApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 
@@ -7,7 +8,96 @@ type Page = 'login' | 'exam' | 'results'
 
 interface Question { id: string; number: number; questionText: string; options: string[] }
 
-export default function CBTPage() {
+function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+  if (!open) return null
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(4px)',
+        zIndex: 1400,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 640,
+          maxHeight: '90vh',
+          background: 'var(--navy2)',
+          border: '1px solid var(--border)',
+          borderRadius: 18,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--white)' }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20 }}>✕</button>
+        </div>
+        <div style={{ padding: 16, overflow: 'auto' }}>{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function ConfirmModal({
+  open,
+  title,
+  message,
+  confirmText = 'Confirm',
+  cancelText = 'Cancel',
+  danger,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean
+  title: string
+  message: React.ReactNode
+  confirmText?: string
+  cancelText?: string
+  danger?: boolean
+  busy?: boolean
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title={title}>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <div className="text-sm text-muted" style={{ lineHeight: 1.6 }}>
+          {message}
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} disabled={busy}>
+            {cancelText}
+          </button>
+          <button
+            type="button"
+            className={`btn ${danger ? 'btn-danger' : 'btn-primary'} btn-sm`}
+            onClick={onConfirm}
+            disabled={busy}
+            style={{ justifyContent: 'center', minWidth: 140 }}
+          >
+            {busy ? 'Please wait…' : confirmText}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function CBTPageInner() {
+  const searchParams = useSearchParams()
+  const scheduleId = String(searchParams.get('scheduleId') || '').trim()
   const [page, setPage] = useState<Page>('login')
   const [regNumber, setRegNumber] = useState('')
   const [accessCode, setAccessCode] = useState('')
@@ -22,7 +112,10 @@ export default function CBTPage() {
   const [timeLeft, setTimeLeft] = useState(30 * 60)
   const [result, setResult] = useState<any>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [resultsRefreshing, setResultsRefreshing] = useState(false)
+  const [confirmSubmit, setConfirmSubmit] = useState<{ unanswered: number } | null>(null)
   const timerRef = useRef<any>(null)
+  const autosaveWarnedRef = useRef(false)
 
   // Build answer map: questionNumber -> selectedIndex
   const answerMap: Record<string, number> = {}
@@ -33,37 +126,47 @@ export default function CBTPage() {
 
   const startExam = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!regNumber.trim() || !accessCode.trim()) { setLoginError('Please enter both fields'); return }
+    if (!regNumber.trim() || !accessCode.trim()) {
+      setLoginError('Please enter both fields')
+      notify.warning('Please enter both fields')
+      return
+    }
     setLoginLoading(true); setLoginError('')
     try {
-      // Fetch available published exams first
-      let examId = ''
-      try {
-        const exams = await cbtApi.all({ isPublished: 'true' })
-        const examArr = Array.isArray(exams) ? exams : []
-        if (examArr.length > 0) examId = examArr[0].id
-      } catch {}
+      const data = scheduleId
+        ? await cbtApi.loginSchedule(regNumber, accessCode, scheduleId)
+        : await (async () => {
+            // Fallback: old demo behavior (first published exam)
+            let examId = ''
+            try {
+              const exams = await cbtApi.all({ isPublished: 'true' })
+              const examArr = Array.isArray(exams) ? exams : []
+              if (examArr.length > 0) examId = examArr[0].id
+            } catch {}
 
-      let data: any
-      if (examId) {
-        data = await cbtApi.login(regNumber, accessCode, examId)
-      } else {
-        // No live exam — use demo mode with built-in questions
-        data = { student: { name: regNumber, regNumber }, exam: { title: 'Demo CBT Exam', durationMins: 30, questions: DEMO_QUESTIONS }, attempt: { id: 'demo-' + Date.now() } }
-      }
+            if (!examId) {
+              throw new Error('No published exam is available right now. Please contact your tutor or try again later.')
+            }
+            return cbtApi.login(regNumber, accessCode, examId)
+          })()
 
       setExamData(data)
       setAttemptId(data.attempt?.id || '')
-      const qs: Question[] = data.exam?.questions || DEMO_QUESTIONS
+      const qs: Question[] = data.exam?.questions || []
+      if (!Array.isArray(qs) || qs.length === 0) {
+        throw new Error('Exam has no questions yet. Please contact your tutor.')
+      }
       setQuestions(qs)
       setTimeLeft((data.exam?.durationMins || 30) * 60)
       setPage('exam')
+      notify.success('Exam started')
       timerRef.current = setInterval(() => setTimeLeft(t => {
         if (t <= 1) { clearInterval(timerRef.current); handleSubmit(true); return 0 }
         return t - 1
       }), 1000)
     } catch (err: any) {
-      setLoginError(err.message || 'Invalid credentials. Try any non-empty values for demo.')
+      notify.fromError(err, 'Could not start exam')
+      setLoginError(err?.message || 'Invalid credentials. Try any non-empty values for demo.')
     }
     setLoginLoading(false)
   }
@@ -71,34 +174,58 @@ export default function CBTPage() {
   const selectAnswer = (optIdx: number) => {
     setAnswers(a => ({ ...a, [current]: optIdx }))
     // Auto-save to backend
-    if (attemptId && !attemptId.startsWith('demo-')) {
+    if (attemptId) {
       const q = questions[current]
-      if (q) cbtApi.saveAnswer(attemptId, q.number, optIdx).catch(() => {})
+      if (q) {
+        cbtApi
+          .saveAnswer(attemptId, q.number, optIdx)
+          .then(() => {
+            autosaveWarnedRef.current = false
+          })
+          .catch(() => {
+            if (!autosaveWarnedRef.current) {
+              autosaveWarnedRef.current = true
+              notify.warning('Autosave failed — your answers are still on this device. Keep going and submit at the end.')
+            }
+          })
+      }
     }
   }
 
   const handleSubmit = async (autoSubmit = false) => {
     if (!autoSubmit) {
       const unanswered = questions.length - Object.keys(answers).length
-      if (unanswered > 0 && !confirm(`You have ${unanswered} unanswered question(s). Submit anyway?`)) return
+      if (unanswered > 0) {
+        setConfirmSubmit({ unanswered })
+        return
+      }
     }
     clearInterval(timerRef.current)
     setSubmitting(true)
     try {
-      let res: any
-      if (attemptId && !attemptId.startsWith('demo-')) {
-        res = await cbtApi.submit(attemptId, answerMap)
-      } else {
-        // Demo grading
-        let correct = 0
-        DEMO_QUESTIONS.forEach((q: any, i: number) => { if (answers[i] === q.correct) correct++ })
-        const pct = Math.round(correct / DEMO_QUESTIONS.length * 100)
-        res = { score: pct, totalCorrect: correct, totalQuestions: DEMO_QUESTIONS.length, breakdown: DEMO_QUESTIONS.map((q: any, i: number) => ({ questionNumber: q.number, selected: answers[i] ?? null, correct: q.correct, isCorrect: answers[i] === q.correct, explanation: q.explanation })) }
-      }
+      const res = await cbtApi.submit(attemptId, answerMap)
       setResult(res)
       setPage('results')
     } catch (e: any) { notify.fromError(e, 'Submission failed') }
     setSubmitting(false)
+  }
+
+  const refreshReleasedResult = async () => {
+    if (!attemptId) return
+    setResultsRefreshing(true)
+    try {
+      const r = await cbtApi.result(attemptId)
+      if (r?.resultsPending) {
+        notify.warning('Results are not released yet. Try again after your tutor notifies you.')
+        setResult(r)
+      } else {
+        setResult(r)
+        notify.success('Results are now available.')
+      }
+    } catch (e: any) {
+      notify.fromError(e, 'Could not load results')
+    }
+    setResultsRefreshing(false)
   }
 
   const minutes = String(Math.floor(timeLeft / 60)).padStart(2, '0')
@@ -118,7 +245,11 @@ export default function CBTPage() {
       <div className="cbt-login-card" style={{ position: 'relative', zIndex: 2, width: '100%', maxWidth: 460 }}>
         <div className="cbt-login-icon-wrap">📝</div>
         <h2 className="cbt-login-title">CBT Examination Portal</h2>
-        <p className="cbt-login-sub">Enter your student credentials to begin</p>
+        <p className="cbt-login-sub">
+          {scheduleId
+            ? 'Enter your registration number and exam access code (not your dashboard login password).'
+            : 'Enter your student credentials to begin'}
+        </p>
         <div className="cbt-login-banner">
           <div className="cbt-login-banner-title">AdharaEdu CBT Platform</div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
@@ -135,11 +266,28 @@ export default function CBTPage() {
           </div>
           <div>
             <label className="cbt-login-label" htmlFor="cbt-code">Access Code</label>
-            <input id="cbt-code" type="password" className="cbt-login-field" placeholder="Last digits of your reg number" value={accessCode} onChange={e => { setAccessCode(e.target.value); setLoginError('') }} />
+            <input
+              id="cbt-code"
+              type={scheduleId ? 'text' : 'password'}
+              autoComplete="off"
+              className="cbt-login-field"
+              placeholder={scheduleId ? 'e.g. 051 (last segment of reg number)' : 'Last digits of your reg number'}
+              value={accessCode}
+              onChange={e => { setAccessCode(e.target.value); setLoginError('') }}
+            />
+            {scheduleId ? (
+              <p className="cbt-login-demo" style={{ marginTop: 8, marginBottom: 0, textAlign: 'left' }}>
+                For this scheduled exam, the code is usually the <strong>last part</strong> of your reg number (after the final <code>/</code>). If your tutor set a different code for this paper, use that instead.
+              </p>
+            ) : null}
           </div>
           <button type="submit" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={loginLoading}>{loginLoading ? 'Verifying…' : 'Begin Examination →'}</button>
         </form>
-        <p className="cbt-login-demo">Demo: Enter any reg number + last digits as code</p>
+        <p className="cbt-login-demo">
+          {scheduleId
+            ? 'Reg number must match exactly. Access code is not your AdharaEdu login password.'
+            : 'Use your real reg number and exam access code.'}
+        </p>
         <div style={{ textAlign: 'center' }}>
           <a href="/" className="cbt-login-back">← Back to Website</a>
         </div>
@@ -149,6 +297,41 @@ export default function CBTPage() {
 
   // ── RESULTS ── (CBT tokens — see globals.css)
   if (page === 'results') {
+    const resultsPending = result?.resultsPending === true
+    if (resultsPending) {
+      return (
+        <div id="page-cbt-results" className="cbt-result-wrap">
+          <div className="cbt-result-card cbt-result-card--hero">
+            <div style={{ position: 'relative', zIndex: 2, textAlign: 'center', maxWidth: 480, margin: '0 auto' }}>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>✅</div>
+              <h2 className="cbt-result-msg">Exam submitted</h2>
+              <p className="cbt-login-demo" style={{ marginBottom: 24, lineHeight: 1.6 }}>
+                {result?.message ||
+                  'Your answers are saved. Your tutor will release results when ready — then you can see your score here or under My Exams.'}
+              </p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap', flexDirection: 'column', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ justifyContent: 'center', minWidth: 200 }}
+                  disabled={resultsRefreshing || !attemptId}
+                  onClick={() => void refreshReleasedResult()}
+                >
+                  {resultsRefreshing ? 'Checking…' : 'Refresh results'}
+                </button>
+                {scheduleId ? (
+                  <a href="/dashboard/student?section=student-exams" className="btn btn-ghost">
+                    Back to My Exams
+                  </a>
+                ) : null}
+                <a href="/" className="btn btn-ghost">Back to Website</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     const scorePct = result?.score ?? 0
     const passed = scorePct >= 50
     const totalQ = result?.totalQuestions ?? questions.length
@@ -206,23 +389,38 @@ export default function CBTPage() {
                 <div className="cbt-stat-pill__lbl">⏱ Questions</div>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setPage('login')
-                  setAnswers({})
-                  setFlags({})
-                  setCurrent(0)
-                  setTimeLeft(30 * 60)
-                  setRegNumber('')
-                  setAccessCode('')
-                  setResult(null)
-                }}
-                className="btn btn-primary"
-              >
-                Take Another Exam
-              </button>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap', flexDirection: 'column', alignItems: 'center' }}>
+              {scheduleId ? (
+                <>
+                  <p className="cbt-login-demo" style={{ marginBottom: 4, textAlign: 'center', maxWidth: 420 }}>
+                    This scheduled exam is submitted. Retakes are not allowed.
+                  </p>
+                  <a
+                    href="/dashboard/student?section=student-exams"
+                    className="btn btn-primary"
+                    style={{ justifyContent: 'center' }}
+                  >
+                    Back to My Exams
+                  </a>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPage('login')
+                    setAnswers({})
+                    setFlags({})
+                    setCurrent(0)
+                    setTimeLeft(30 * 60)
+                    setRegNumber('')
+                    setAccessCode('')
+                    setResult(null)
+                  }}
+                  className="btn btn-primary"
+                >
+                  Take Another Exam
+                </button>
+              )}
               <a href="/" className="btn btn-ghost">Back to Website</a>
             </div>
           </div>
@@ -234,6 +432,20 @@ export default function CBTPage() {
   // ── EXAM ──
   return (
     <div id="page-cbt-exam" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <ConfirmModal
+        open={!!confirmSubmit}
+        title="Submit exam?"
+        message={confirmSubmit ? `You have ${confirmSubmit.unanswered} unanswered question(s). Submit anyway?` : ''}
+        confirmText="Submit"
+        cancelText="Go back"
+        danger
+        busy={submitting}
+        onClose={() => setConfirmSubmit(null)}
+        onConfirm={() => {
+          setConfirmSubmit(null)
+          handleSubmit(true)
+        }}
+      />
       <header id="cbt-topbar" className="cbt-topbar-inner">
         <div className="cbt-topbar-title cbt-topbar-title--exam">{examData?.exam?.title || 'CBT Examination'}</div>
         <div className={`cbt-exam-timer cbt-exam-timer--${timerClass}`}>
@@ -340,18 +552,16 @@ export default function CBTPage() {
   )
 }
 
-// Demo questions used when no live exam is available
-const DEMO_QUESTIONS: Question[] = [
-  { id: 'd1', number: 1, questionText: 'What is the primary purpose of a database in a web application?', options: ['To store and manage structured data persistently', 'To design the visual layout of a website', 'To connect users to the internet', 'To handle printing tasks'] },
-  { id: 'd2', number: 2, questionText: 'Which of the following is NOT a valid Python data type?', options: ['Integer', 'String', 'Character', 'Boolean'] },
-  { id: 'd3', number: 3, questionText: 'In HTML, which tag is used to create a hyperlink?', options: ['<link>', '<a>', '<href>', '<url>'] },
-  { id: 'd4', number: 4, questionText: 'What does CSS stand for?', options: ['Computer Style Sheets', 'Creative Style System', 'Cascading Style Sheets', 'Coded Stylesheet Syntax'] },
-  { id: 'd5', number: 5, questionText: 'Which is a popular freelancing platform for tech workers?', options: ['LinkedIn Jobs', 'Fiverr', 'Indeed', 'Glassdoor'] },
-  { id: 'd6', number: 6, questionText: 'What is a "function" in programming?', options: ['A type of variable', 'A reusable block of code that performs a task', 'A programming error', 'A hardware component'] },
-  { id: 'd7', number: 7, questionText: 'Which correctly defines a list in Python?', options: ['list = (1, 2, 3)', 'list = {1, 2, 3}', 'list = [1, 2, 3]', 'list = <1, 2, 3>'] },
-  { id: 'd8', number: 8, questionText: 'What does HTML stand for?', options: ['HyperText Markup Language', 'High Text Manipulation Language', 'HyperText Management Language', 'Hierarchical Text Markup Language'] },
-  { id: 'd9', number: 9, questionText: 'Which CSS property controls text color?', options: ['font-color', 'text-style', 'color', 'foreground'] },
-  { id: 'd10', number: 10, questionText: 'What symbol starts a comment in Python?', options: ['//', '/*', '#', '--'] },
-]
-// Add correct answers for demo grading (not sent to students)
-;(DEMO_QUESTIONS as any).forEach((q: any, i: number) => { q.correct = [0,2,1,2,1,1,2,0,2,2][i] })
+export default function CBTPage() {
+  return (
+    <Suspense
+      fallback={
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--navy)' }}>
+          <p className="text-muted">Loading…</p>
+        </div>
+      }
+    >
+      <CBTPageInner />
+    </Suspense>
+  )
+}

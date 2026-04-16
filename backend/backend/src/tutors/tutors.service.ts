@@ -1,10 +1,20 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Track3Stack, TrackLevel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
 import * as argon2 from '@node-rs/argon2';
+
+/** Initial password set when super admin creates a tutor account (must match email). */
+export const TUTOR_INITIAL_PASSWORD = 'Tutor@123';
 
 @Injectable()
 export class TutorsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private config: ConfigService,
+    private emailService: EmailService,
+  ) {}
 
   /** Strip sensitive KYC / payroll fields for school admin API responses */
   sanitizeTutorForSchoolAdmin(tutor: Record<string, any>) {
@@ -107,8 +117,11 @@ export class TutorsService {
   async findAll(query: { isVerified?: boolean; search?: string }) {
     const where: any = {};
     if (query.isVerified !== undefined) where.isVerified = query.isVerified;
+    // Hide deactivated tutor users by default
+    where.user = { ...(where.user || {}), isActive: true };
     if (query.search) {
       where.user = {
+        ...(where.user || {}),
         OR: [
           { firstName: { contains: query.search, mode: 'insensitive' } },
           { lastName: { contains: query.search, mode: 'insensitive' } },
@@ -137,6 +150,34 @@ export class TutorsService {
         _count: { select: { reports: true, cbtExams: true } },
       },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async deactivate(tutorId: string) {
+    const tutor = await this.prisma.tutor.findUnique({
+      where: { id: tutorId },
+      select: { id: true, userId: true },
+    });
+    if (!tutor) throw new NotFoundException('Tutor not found');
+
+    await this.prisma.user.update({
+      where: { id: tutor.userId },
+      data: { isActive: false },
+    });
+
+    return { ok: true };
+  }
+
+  async setVerified(tutorId: string, isVerified: boolean) {
+    const tutor = await this.prisma.tutor.findUnique({
+      where: { id: tutorId },
+      select: { id: true },
+    });
+    if (!tutor) throw new NotFoundException('Tutor not found');
+
+    return this.prisma.tutor.update({
+      where: { id: tutorId },
+      data: { isVerified: !!isVerified },
     });
   }
 
@@ -197,31 +238,73 @@ export class TutorsService {
     lastName: string;
     email: string;
     phone?: string;
-    bio?: string;
     specializations?: string[];
     tracks?: any[];
   }) {
-    const password = await argon2.hash('Tutor@123');
-    const user = await this.prisma.user.create({
-      data: {
-        email: data.email,
-        password,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        phone: data.phone,
-        role: 'TUTOR',
-      },
+    const email = String(data.email || '').trim().toLowerCase();
+    const password = await argon2.hash(TUTOR_INITIAL_PASSWORD);
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true, role: true, isActive: true },
     });
-    return this.prisma.tutor.create({
-      data: {
+
+    if (existing?.isActive) {
+      throw new BadRequestException('A user with this email already exists.');
+    }
+
+    // If a deactivated TUTOR exists, reactivate + reset password so the email can be reused for testing.
+    const user = existing
+      ? await this.prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            password,
+            firstName: data.firstName,
+            lastName: data.lastName,
+            phone: data.phone,
+            role: 'TUTOR',
+            mustChangePassword: false,
+            isActive: true,
+          },
+        })
+      : await this.prisma.user.create({
+          data: {
+            email,
+            password,
+            firstName: data.firstName,
+            lastName: data.lastName,
+            phone: data.phone,
+            role: 'TUTOR',
+            mustChangePassword: false,
+          },
+        });
+
+    const tutor = await this.prisma.tutor.upsert({
+      where: { userId: user.id },
+      update: {
+        specializations: data.specializations || [],
+        tracks: data.tracks || [],
+        onboardingStatus: 'DRAFT',
+      },
+      create: {
         userId: user.id,
-        bio: data.bio,
         specializations: data.specializations || [],
         tracks: data.tracks || [],
         onboardingStatus: 'DRAFT',
       },
       include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
     });
+
+    const base = (this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000').replace(/\/$/, '');
+    await this.emailService.sendTutorWelcome({
+      email,
+      firstName: data.firstName,
+      loginUrl: `${base}/auth/login`,
+      onboardingUrl: `${base}/dashboard/tutor/onboarding`,
+      temporaryPassword: TUTOR_INITIAL_PASSWORD,
+    });
+
+    return tutor;
   }
 
   /** Tutor self-service: save KYC draft (partial allowed). */
@@ -327,6 +410,33 @@ export class TutorsService {
     return this.prisma.tutor.update({ where: { id }, data });
   }
 
+  /** Prefer explicit label; otherwise school `academicYearLabel` + `currentTermLabel` (what Super Admin expects as “current term”). */
+  private async resolveAssignmentTermLabel(schoolId: string, provided: string | undefined): Promise<string> {
+    let t = String(provided ?? '').trim();
+    if (t) return t;
+    const school = await this.prisma.school.findUnique({
+      where: { id: schoolId },
+      select: { academicYearLabel: true, currentTermLabel: true },
+    });
+    if (!school) throw new NotFoundException('School not found');
+    const y = school.academicYearLabel?.trim() || '';
+    const cur = school.currentTermLabel?.trim() || '';
+    t = [y, cur].filter(Boolean).join(' ').trim();
+    if (!t) {
+      throw new BadRequestException(
+        'Set academic year and current term on the school profile, or enter a term label when assigning.',
+      );
+    }
+    return t;
+  }
+
+  /**
+   * Creates or updates tutor assignments for the given **term** (`termLabel`).
+   * - Rows are keyed by tutor + school + track + class + **term** — a new school term gets new rows.
+   * - When new rows are created for a class/track, older **active** assignments for the same tutor/class/track
+   *   with a **different** `termLabel` are ended (`isActive: false`) so the tutor dashboard shows the current term.
+   * - Historical student data (module progress, attendance, etc.) is not deleted.
+   */
   async assignToSchool(
     tutorId: string,
     schoolId: string,
@@ -334,11 +444,16 @@ export class TutorsService {
       track: any;
       className?: string;
       classNames?: string[];
-      termLabel: string;
+      /** Optional — defaults to the school’s current term (academic year + current term label). */
+      termLabel?: string;
       startDate: Date;
       expectedSessionsPerWeek?: number;
+      /** When track is TRACK_3: PYTHON_FLASK vs REACT_NODE (modules 3–4). */
+      track3Stack?: string;
     },
   ) {
+    const termLabel = await this.resolveAssignmentTermLabel(schoolId, data.termLabel);
+
     const expectedSessionsPerWeek = Math.min(
       14,
       Math.max(1, Math.floor(Number(data.expectedSessionsPerWeek ?? 3) || 3)),
@@ -353,6 +468,11 @@ export class TutorsService {
       throw new BadRequestException('Select at least one class');
     }
 
+    const stackForT3: Track3Stack | undefined =
+      data.track === TrackLevel.TRACK_3
+        ? ((data.track3Stack as Track3Stack) || Track3Stack.PYTHON_FLASK)
+        : undefined;
+
     const include = {
       school: { select: { name: true } },
       tutor: { include: { user: { select: { firstName: true, lastName: true } } } },
@@ -363,7 +483,7 @@ export class TutorsService {
         tutorId,
         schoolId,
         track: data.track,
-        termLabel: data.termLabel,
+        termLabel,
         isActive: true,
         className: { in: targets },
       },
@@ -381,9 +501,10 @@ export class TutorsService {
                 schoolId,
                 track: data.track,
                 className,
-                termLabel: data.termLabel,
+                termLabel,
                 startDate: data.startDate,
                 expectedSessionsPerWeek,
+                track3Stack: stackForT3,
               },
               include,
             }),
@@ -391,7 +512,44 @@ export class TutorsService {
         )
       : [];
 
+    if (created.length > 0) {
+      await this.prisma.tutorAssignment.updateMany({
+        where: {
+          tutorId,
+          schoolId,
+          track: data.track,
+          className: { in: targets },
+          isActive: true,
+          termLabel: { not: termLabel },
+        },
+        data: { isActive: false, endDate: new Date() },
+      });
+    }
+
     const merged = [...existing, ...created];
+
+    if (data.track === TrackLevel.TRACK_3 && stackForT3) {
+      await this.prisma.tutorAssignment.updateMany({
+        where: {
+          tutorId,
+          schoolId,
+          track: TrackLevel.TRACK_3,
+          termLabel,
+          className: { in: targets },
+          isActive: true,
+        },
+        data: { track3Stack: stackForT3 },
+      });
+      await this.prisma.student.updateMany({
+        where: {
+          schoolId,
+          className: { in: targets },
+          track: TrackLevel.TRACK_3,
+          termLabel,
+        },
+        data: { track3Stack: stackForT3 },
+      });
+    }
     if (targets.length === 1) {
       return merged[0];
     }

@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
-import { studentsApi, modulesApi, attendanceApi, notifApi, messagesApi, certificatesApi, assignmentsApi, examSchedulesApi, noticesApi, practicalsApi, lessonsApi, uploadsApi } from '@/lib/api'
+import { studentsApi, modulesApi, attendanceApi, notifApi, messagesApi, certificatesApi, assignmentsApi, examSchedulesApi, noticesApi, practicalsApi, lessonsApi, uploadsApi, authApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { formatTrack } from '@/lib/schoolProfileLabels'
 
@@ -35,6 +35,47 @@ function useLoad<T>(queryKey: unknown[], fn: () => Promise<T>, def: T, enabled =
   }
 
   return { data, loading: enabled && isLoading, setData }
+}
+
+function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+  if (!open) return null
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(4px)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 720,
+          maxHeight: '90vh',
+          background: 'var(--navy2)',
+          border: '1px solid var(--border)',
+          borderRadius: 18,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--white)' }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20 }}>✕</button>
+        </div>
+        <div style={{ padding: 16, overflow: 'auto' }}>{children}</div>
+      </div>
+    </div>
+  )
 }
 
 /* ── DASHBOARD HOME ── */
@@ -931,9 +972,27 @@ function AskTutor({ student }: { student: any }) {
 }
 
 /* ── MY EXAMS ── */
+function cbtAccessHint(schedule: any, student: any) {
+  const custom = String(schedule?.accessCode || '').trim()
+  if (custom) {
+    return { kind: 'code' as const, value: custom }
+  }
+  const reg = String(student?.regNumber || '').trim()
+  const last = reg ? reg.split('/').pop()?.trim() : ''
+  if (last) {
+    return { kind: 'regTail' as const, value: last }
+  }
+  return { kind: 'generic' as const, value: '' }
+}
+
 function StudentExams({ student }: { student: any }) {
   const { data: schedules, loading } = useLoad(['student', 'exam-schedules', student?.id], () => examSchedulesApi.mine(), [], !!student?.id)
   const arr = Array.isArray(schedules) ? schedules : []
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 15_000)
+    return () => clearInterval(t)
+  }, [])
   const upcoming = arr.filter((e: any) => new Date(e.scheduledAt) > new Date() && e.status !== 'CANCELLED')
   const past = arr.filter((e: any) => new Date(e.scheduledAt) <= new Date())
   const next = upcoming[0]
@@ -943,9 +1002,36 @@ function StudentExams({ student }: { student: any }) {
     return match ? `Module: ${match[0]}` : null
   }
 
+  const renderAccessCell = (e: any) => {
+    const hint = cbtAccessHint(e, student)
+    if (hint.kind === 'code') {
+      return (
+        <span className="badge badge-info" style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }} title="Enter this on the CBT login screen (not your dashboard password)">
+          {hint.value}
+        </span>
+      )
+    }
+    if (hint.kind === 'regTail') {
+      return (
+        <span className="text-muted text-xs" style={{ lineHeight: 1.4 }} title="CBT access code — last part of your reg. number">
+          Use <code style={{ fontSize: 11, color: 'var(--teal2)' }}>{hint.value}</code>
+          <span className="text-muted"> (last part of reg. no.)</span>
+        </span>
+      )
+    }
+    return <span className="text-muted text-xs">Last segment of reg. no. after /</span>
+  }
+
   return (
     <div>
-      <div className="flex-between mb-20"><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>My Exams</h3></div>
+      <div className="flex-between mb-20">
+        <div>
+          <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>My Exams</h3>
+          <p className="text-muted text-sm mt-8" style={{ maxWidth: 640, lineHeight: 1.5 }}>
+            For <strong>Enter</strong>, the exam hall asks for your registration number and the access code in the table below — not your portal login password.
+          </p>
+        </div>
+      </div>
       {next && (
         <div style={{ background: 'linear-gradient(135deg,rgba(239,68,68,0.12),rgba(245,158,11,0.08))', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', marginBottom: 24, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 32 }}>⏰</div>
@@ -953,15 +1039,37 @@ function StudentExams({ student }: { student: any }) {
             <div className="fw-700 text-white" style={{ fontSize: 15, marginBottom: 4 }}>Next: {next.cbtExam?.title}</div>
             {moduleLabel(next) && <div style={{ marginBottom: 6 }}><span className="badge badge-info">{moduleLabel(next)}</span></div>}
             <div className="text-sm text-muted">{new Date(next.scheduledAt).toLocaleDateString('en-NG', { weekday: 'long', month: 'long', day: 'numeric' })} · {next.venue || 'Computer Lab'} · {next.durationMins} mins</div>
+            <div className="text-xs mt-8" style={{ color: 'var(--muted)' }}>
+              CBT access: {(() => {
+                const h = cbtAccessHint(next, student)
+                if (h.kind === 'code') return <><span className="text-white" style={{ fontFamily: 'ui-monospace' }}>{h.value}</span> (exam code)</>
+                if (h.kind === 'regTail') return <>use <code style={{ fontSize: 11, color: 'var(--teal2)' }}>{h.value}</code> — last part of your reg. number</>
+                return 'last part of reg. number after /'
+              })()}
+            </div>
           </div>
-          <a href="/cbt" className="btn btn-primary">Enter Exam Hall →</a>
+          {(() => {
+            const sched = new Date(next.scheduledAt).getTime()
+            const duration = Number(next.durationMins || next.cbtExam?.durationMins || 30)
+            const openAt = sched
+            const closeAt = sched + duration * 60 * 1000 + 15 * 60 * 1000
+            const now = nowMs
+            const canEnter = next.status === 'SCHEDULED' && now >= openAt && now <= closeAt
+            return canEnter ? (
+              <a href={`/cbt?scheduleId=${encodeURIComponent(String(next.id))}`} className="btn btn-primary">Enter Exam Hall →</a>
+            ) : (
+              <button type="button" className="btn btn-ghost" disabled title={now < openAt ? 'Not open yet' : 'Closed'}>
+                {now < openAt ? 'Not open yet' : 'Closed'}
+              </button>
+            )
+          })()}
         </div>
       )}
       {loading ? <p className="text-muted text-sm" style={{ padding: 20 }}>Loading…</p> : (
         <div className="card">
           <div className="font-display fw-600 text-white mb-16">Exam Schedule</div>
           <table className="data-table">
-            <thead><tr><th>Exam</th><th>Module</th><th>Date & Time</th><th>Venue</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
+            <thead><tr><th>Exam</th><th>Module</th><th>Date & Time</th><th>Venue</th><th>Duration</th><th>Status</th><th>CBT access</th><th>Action</th></tr></thead>
             <tbody>
               {arr.map((e: any) => (
                 <tr key={e.id}>
@@ -971,10 +1079,39 @@ function StudentExams({ student }: { student: any }) {
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{e.venue || '—'}</td>
                   <td style={{ fontSize: 12 }}>{e.durationMins} min</td>
                   <td><span className={`badge badge-${e.status === 'SCHEDULED' ? 'info' : e.status === 'CANCELLED' ? 'danger' : 'success'}`}>{e.status}</span></td>
-                  <td>{e.status === 'SCHEDULED' && new Date(e.scheduledAt) > new Date() ? <a href="/cbt" className="btn btn-primary btn-sm" style={{ fontSize: 11 }}>Enter →</a> : <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}>View</button>}</td>
+                  <td style={{ maxWidth: 160 }}>{renderAccessCell(e)}</td>
+                  <td>
+                    {(() => {
+                      const sched = new Date(e.scheduledAt).getTime()
+                      const duration = Number(e.durationMins || e.cbtExam?.durationMins || 30)
+                      const openAt = sched
+                      const closeAt = sched + duration * 60 * 1000 + 15 * 60 * 1000
+                      const now = nowMs
+                      const canEnter = e.status === 'SCHEDULED' && now >= openAt && now <= closeAt
+                      return canEnter ? (
+                        <a
+                          href={`/cbt?scheduleId=${encodeURIComponent(String(e.id))}`}
+                          className="btn btn-primary btn-sm"
+                          style={{ fontSize: 11 }}
+                        >
+                          Enter →
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 11, opacity: 0.8 }}
+                          title={now < openAt ? 'Not open yet' : now > closeAt ? 'Closed' : 'Unavailable'}
+                          disabled
+                        >
+                          {now < openAt ? 'Not open yet' : now > closeAt ? 'Closed' : 'View'}
+                        </button>
+                      )
+                    })()}
+                  </td>
                 </tr>
               ))}
-              {arr.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No exams scheduled yet</td></tr>}
+              {arr.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No exams scheduled yet</td></tr>}
             </tbody>
           </table>
         </div>
@@ -985,17 +1122,55 @@ function StudentExams({ student }: { student: any }) {
 
 /* ── NOTIFICATIONS ── */
 function StudentNotifications() {
+  const router = useRouter()
   const { data: notifs, loading, setData } = useLoad(['student', 'notifications'], () => notifApi.all(), [], true)
   const arr = Array.isArray(notifs) ? notifs : []
-  const markAll = async () => { try { await notifApi.markAllRead(); setData(arr.map((n: any) => ({ ...n, isRead: true })) as any) } catch {} }
-  const mark = async (id: string) => { try { await notifApi.markRead(id); setData(arr.map((n: any) => n.id === id ? { ...n, isRead: true } : n) as any) } catch {} }
+  const markAll = async () => {
+    try {
+      await notifApi.markAllRead()
+      setData(arr.map((n: any) => ({ ...n, isRead: true })) as any)
+      notify.success('All notifications marked as read')
+    } catch (e: any) {
+      notify.fromError(e, 'Could not update notifications')
+    }
+  }
+  const mark = async (id: string) => {
+    try {
+      await notifApi.markRead(id)
+      setData(arr.map((n: any) => n.id === id ? { ...n, isRead: true } : n) as any)
+    } catch (e: any) {
+      notify.fromError(e, 'Could not mark as read')
+    }
+  }
   return (
     <div>
       <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Notifications</h3><div className="text-muted text-sm">{loading ? '…' : `${arr.filter((n: any) => !n.isRead).length} unread`}</div></div><button onClick={markAll} className="btn btn-ghost btn-sm" disabled={loading}>Mark All Read</button></div>
       {loading && <p className="text-muted text-sm" style={{ padding: 20 }}>Loading…</p>}
       <div className="card" style={{ padding: 0 }}>
         {arr.map((n: any, i: number) => (
-          <div key={n.id || i} onClick={() => !n.isRead && mark(n.id)} style={{ display: 'flex', gap: 14, padding: 16, borderLeft: `3px solid ${!n.isRead ? 'rgba(212,168,83,0.4)' : 'transparent'}`, borderBottom: '1px solid var(--border2)', background: !n.isRead ? 'rgba(212,168,83,0.04)' : '', cursor: !n.isRead ? 'pointer' : 'default' }}>
+          <div
+            key={n.id || i}
+            onClick={() => {
+              if (n?.id) void mark(n.id)
+              const link = String(n?.link || '').trim()
+              if (link) {
+                // Link is absolute within app; use full navigation so query/hash works reliably.
+                window.location.href = link
+              } else {
+                // Fallback: open notifications section (already here)
+                router.push('/dashboard/student?section=student-notifications')
+              }
+            }}
+            style={{
+              display: 'flex',
+              gap: 14,
+              padding: 16,
+              borderLeft: `3px solid ${!n.isRead ? 'rgba(212,168,83,0.4)' : 'transparent'}`,
+              borderBottom: '1px solid var(--border2)',
+              background: !n.isRead ? 'rgba(212,168,83,0.04)' : '',
+              cursor: 'pointer',
+            }}
+          >
             <div style={{ width: 36, height: 36, background: 'var(--muted3)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>🔔</div>
             <div style={{ flex: 1 }}><div className="text-sm fw-700 text-white mb-4">{n.title}</div><div className="text-sm text-muted" style={{ lineHeight: 1.5 }}>{n.message}</div><div className="text-xs text-muted" style={{ marginTop: 6 }}>{new Date(n.createdAt).toLocaleDateString('en-NG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div></div>
             {!n.isRead && <span className="badge badge-gold" style={{ alignSelf: 'flex-start', flexShrink: 0 }}>New</span>}
@@ -1034,12 +1209,35 @@ function SchoolNotices({ student }: { student: any }) {
 }
 
 /* ── SETTINGS ── */
-function StudentSettings({ student }: { student: any }) {
+function StudentSettings({ student, onProfileUpdated, hidePassword }: { student: any; onProfileUpdated?: () => void; hidePassword?: boolean }) {
   const [form, setForm] = useState({ firstName: student?.user?.firstName || '', lastName: student?.user?.lastName || '', email: student?.user?.email || '', phone: student?.user?.phone || '' })
   const [saved, setSaved] = useState(false)
+  const [pwd, setPwd] = useState({ old: '', next: '', confirm: '' })
+  const [pwdBusy, setPwdBusy] = useState(false)
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
     try { const { usersApi } = await import('@/lib/api'); await usersApi.updateProfile({ firstName: form.firstName, lastName: form.lastName, phone: form.phone }); setSaved(true); notify.success('Profile saved'); setTimeout(() => setSaved(false), 2500) } catch (e: any) { notify.fromError(e) }
+  }
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (pwd.next !== pwd.confirm) {
+      notify.error('New passwords do not match')
+      return
+    }
+    if (pwd.next.length < 8) {
+      notify.error('New password must be at least 8 characters')
+      return
+    }
+    setPwdBusy(true)
+    try {
+      await authApi.changePassword(pwd.old, pwd.next)
+      notify.success('Password updated')
+      setPwd({ old: '', next: '', confirm: '' })
+      onProfileUpdated?.()
+    } catch (err: any) {
+      notify.error(err?.message || 'Could not change password')
+    }
+    setPwdBusy(false)
   }
   return (
     <div>
@@ -1054,11 +1252,23 @@ function StudentSettings({ student }: { student: any }) {
             <div><label className="form-label">First Name</label><input className="form-input" value={form.firstName} onChange={e => setForm({ ...form, firstName: e.target.value })} /></div>
             <div><label className="form-label">Last Name</label><input className="form-input" value={form.lastName} onChange={e => setForm({ ...form, lastName: e.target.value })} /></div>
           </div>
-          <div><label className="form-label">Email</label><input className="form-input" value={form.email} readOnly style={{ opacity: 0.6 }} /></div>
+          <div><label className="form-label">Email</label><input className="form-input" value={form.email || ''} readOnly style={{ opacity: 0.6 }} placeholder="—" /></div>
           <div><label className="form-label">Phone</label><input className="form-input" value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
           <button type="submit" className="btn btn-primary btn-sm">{saved ? '✓ Saved!' : 'Save Changes'}</button>
         </form>
       </div>
+      {!hidePassword && (
+      <div className="card mt-20" style={{ maxWidth: 480 }}>
+        <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Change password</div>
+        <p className="text-muted text-sm mb-16" style={{ lineHeight: 1.6 }}>Use a password you can remember. Your tutor may ask you to update from the school default.</p>
+        <form onSubmit={changePassword} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div><label className="form-label">Current password</label><input type="password" className="form-input" autoComplete="current-password" value={pwd.old} onChange={e => setPwd({ ...pwd, old: e.target.value })} /></div>
+          <div><label className="form-label">New password</label><input type="password" className="form-input" autoComplete="new-password" value={pwd.next} onChange={e => setPwd({ ...pwd, next: e.target.value })} /></div>
+          <div><label className="form-label">Confirm new password</label><input type="password" className="form-input" autoComplete="new-password" value={pwd.confirm} onChange={e => setPwd({ ...pwd, confirm: e.target.value })} /></div>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={pwdBusy}>{pwdBusy ? 'Updating…' : 'Update password'}</button>
+        </form>
+      </div>
+      )}
     </div>
   )
 }
@@ -1101,6 +1311,16 @@ export default function StudentDashboard() {
   const [progress, setProgress] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [isParent, setIsParent] = useState(false)
+  const [examPopup, setExamPopup] = useState<{ open: boolean; schedule: any | null }>({ open: false, schedule: null })
+
+  const refreshStudent = useCallback(async () => {
+    try {
+      const s = await studentsApi.me()
+      setStudent(s)
+    } catch {
+      /* ignore */
+    }
+  }, [])
   const { data: assignmentBadgeData } = useQuery({
     queryKey: ['student', 'badge-assignments', student?.id],
     queryFn: () => assignmentsApi.mine(),
@@ -1176,6 +1396,23 @@ export default function StudentDashboard() {
         'student-notifications': unreadNotifs > 0 ? unreadNotifs : null,
       }
 
+  // One-time exam popup (per schedule) on dashboard load.
+  useEffect(() => {
+    if (isParent) return
+    if (!student?.id) return
+    const upcoming = examsArr
+      .filter((e: any) => e?.status !== 'CANCELLED' && new Date(e.scheduledAt) > new Date())
+      .sort((a: any, b: any) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt))
+    const next = upcoming[0]
+    if (!next?.id) return
+    const key = `adhara_exam_popup_seen_${next.id}`
+    if (typeof window !== 'undefined' && window.localStorage.getItem(key)) return
+    // Show only if within next 14 days (avoid noisy popups for far-future exams)
+    const days = (+new Date(next.scheduledAt) - Date.now()) / (1000 * 60 * 60 * 24)
+    if (days > 14) return
+    setExamPopup({ open: true, schedule: next })
+  }, [isParent, student?.id, examsArr.length])
+
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--navy)' }}>
       <div style={{ textAlign: 'center' }}><div style={{ fontSize: 48, animation: 'float 2s ease-in-out infinite' }}>📚</div><p style={{ color: 'var(--muted)', marginTop: 16 }}>Loading your portal…</p></div>
@@ -1193,7 +1430,8 @@ export default function StudentDashboard() {
       case 'student-asktutor': return <AskTutor student={student} />
       case 'student-exams': case 'parent-exams': return <StudentExams student={student} />
       case 'student-notifications': return <StudentNotifications />
-      case 'student-settings': case 'parent-settings': return <StudentSettings student={student} />
+      case 'student-settings': return <StudentSettings student={student} onProfileUpdated={refreshStudent} />
+      case 'parent-settings': return <StudentSettings student={student} onProfileUpdated={refreshStudent} hidePassword />
       case 'parent-notices': return <SchoolNotices student={student} />
       case 'parent-overview': return <ParentOverview student={student} stats={stats} progress={progress} />
       default: return isParent ? <ParentOverview student={student} stats={stats} progress={progress} /> : <StudentHome student={student} stats={stats} progress={progress} onSection={setSection} />
@@ -1204,6 +1442,92 @@ export default function StudentDashboard() {
     <DashboardShell role={isParent ? 'parent' : 'student'} title={titles[section] || 'Dashboard'}
       subtitle={section === 'student-dashboard' ? `${student?.user?.firstName} ${student?.user?.lastName} · ${student?.regNumber} · ${student?.track?.replace('TRACK_', 'Track ')}` : undefined}
       section={section} onSectionChange={setSection} navBadges={navBadges}>
+      <Modal
+        open={!isParent && examPopup.open && !!examPopup.schedule}
+        onClose={() => {
+          const id = examPopup.schedule?.id
+          if (id && typeof window !== 'undefined') {
+            window.localStorage.setItem(`adhara_exam_popup_seen_${id}`, String(Date.now()))
+          }
+          setExamPopup({ open: false, schedule: null })
+        }}
+        title="Upcoming exam"
+      >
+        {examPopup.schedule ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="badge badge-warning" style={{ alignSelf: 'flex-start' }}>Scheduled</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, color: 'var(--white)' }}>
+              {examPopup.schedule?.cbtExam?.title || 'CBT Exam'}
+            </div>
+            <div className="text-muted text-sm">
+              {new Date(examPopup.schedule.scheduledAt).toLocaleDateString('en-NG', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}{' '}
+              · {new Date(examPopup.schedule.scheduledAt).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })}
+            </div>
+            <div className="text-muted text-sm">
+              Venue: <span style={{ color: 'var(--white)' }}>{examPopup.schedule.venue || 'Computer Lab'}</span> · Duration:{' '}
+              <span style={{ color: 'var(--white)' }}>{examPopup.schedule.durationMins || examPopup.schedule?.cbtExam?.durationMins || 60} mins</span>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const id = examPopup.schedule?.id
+                  if (id && typeof window !== 'undefined') {
+                    window.localStorage.setItem(`adhara_exam_popup_seen_${id}`, String(Date.now()))
+                  }
+                  setExamPopup({ open: false, schedule: null })
+                  setSection('student-exams')
+                }}
+              >
+                View schedule →
+              </button>
+              <a
+                className="btn btn-ghost"
+                href="/cbt"
+                onClick={() => {
+                  const id = examPopup.schedule?.id
+                  if (id && typeof window !== 'undefined') {
+                    window.localStorage.setItem(`adhara_exam_popup_seen_${id}`, String(Date.now()))
+                  }
+                }}
+              >
+                Enter exam hall
+              </a>
+            </div>
+            <div className="text-muted text-xs" style={{ marginTop: 4 }}>
+              This reminder will only show once for this exam.
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+      {!isParent && student?.user?.mustChangePassword && (
+        <div
+          role="status"
+          style={{
+            marginBottom: 20,
+            padding: '14px 18px',
+            borderRadius: 12,
+            border: '1px solid rgba(212,168,83,0.45)',
+            background: 'linear-gradient(135deg, rgba(212,168,83,0.14), rgba(26,127,212,0.08))',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 12,
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ flex: '1 1 220px', fontSize: 14, color: 'var(--white)', lineHeight: 1.5 }}>
+            <strong style={{ color: 'var(--gold)' }}>Change your password</strong>
+            <span style={{ color: 'var(--muted)', display: 'block', marginTop: 4 }}>
+              Your tutor will remind you to pick a personal password. Update it here when you are ready.
+            </span>
+          </div>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setSection('student-settings')}>
+            Open settings →
+          </button>
+        </div>
+      )}
       {render()}
     </DashboardShell>
   )

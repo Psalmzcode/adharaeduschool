@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AdharaEdu — Certificate of Completion (preview)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Playfair+Display:ital,wght@0,400;0,700;0,800;1,400&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+<!--
+  Field map (matches backend certificates.service.ts generatePDF):
+  studentName, regNumber, schoolName, track (display string e.g. "Track 3"),
+  averageScore, grade = Distinction | Merit | Pass (from score bands),
+  serialNumber (e.g. ADH-CERT-2026-…), issueDate, verifyUrl (QR targets this),
+  optional: qrDataUrl as data URI for print HTML.
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #D6CFC2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 48px 20px;
+    font-family: 'Lato', sans-serif;
+  }
+
+  .cert {
+    width: 960px;
+    background: #FDFAF4;
+    position: relative;
+    overflow: hidden;
+    box-shadow:
+      0 1px 2px rgba(0,0,0,0.04),
+      0 6px 20px rgba(0,0,0,0.09),
+      0 24px 60px rgba(0,0,0,0.1);
+  }
+
+  .band-top {
+    height: 16px;
+    background: #1E7FD4;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='11'%3E%3Crect x='10' y='2' width='20' height='7' rx='4' ry='4' fill='rgba(255,255,255,0.18)'/%3E%3Cpolygon points='20,3.5 21,6 23.5,6 21.5,7.2 22.3,9.5 20,8 17.7,9.5 18.5,7.2 16.5,6 19,6' fill='%23F5C518' opacity='0.75'/%3E%3C/svg%3E");
+    background-repeat: repeat-x;
+    background-position: center;
+  }
+  .band-top-gold {
+    height: 2.5px;
+    background: linear-gradient(90deg, #1E7FD4, #C9963A 20%, #C9963A 80%, #1E7FD4);
+  }
+
+  .band-bottom-gold {
+    height: 2.5px;
+    background: linear-gradient(90deg, #1E7FD4, #C9963A 20%, #C9963A 80%, #1E7FD4);
+  }
+  .band-bottom {
+    height: 16px;
+    background: #1E7FD4;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='11'%3E%3Crect x='10' y='2' width='20' height='7' rx='4' ry='4' fill='rgba(255,255,255,0.18)'/%3E%3Cpolygon points='20,3.5 21,6 23.5,6 21.5,7.2 22.3,9.5 20,8 17.7,9.5 18.5,7.2 16.5,6 19,6' fill='%23F5C518' opacity='0.75'/%3E%3C/svg%3E");
+    background-repeat: repeat-x;
+    background-position: center;
+  }
+
+  .frame-outer {
+    position: absolute;
+    top: 24px; bottom: 24px; left: 19px; right: 19px;
+    border: 1.5px solid rgba(201,150,58,0.38);
+    pointer-events: none;
+    z-index: 2;
+  }
+  .frame-inner {
+    position: absolute;
+    top: 31px; bottom: 31px; left: 26px; right: 26px;
+    border: 0.75px solid rgba(201,150,58,0.18);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .corner {
+    position: absolute;
+    width: 54px; height: 54px;
+    z-index: 3;
+  }
+  .corner svg { width: 54px; height: 54px; }
+  .corner.tl { top: 18px; left: 13px; }
+  .corner.tr { top: 18px; right: 13px; transform: scaleX(-1); }
+  .corner.bl { bottom: 18px; left: 13px; transform: scaleY(-1); }
+  .corner.br { bottom: 18px; right: 13px; transform: scale(-1); }
+
+  .watermark {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    opacity: 0.038;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .pillar {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    opacity: 0.14;
+  }
+  .pillar.left  { left: 33px; }
+  .pillar.right { right: 33px; transform: translateY(-50%) scaleX(-1); }
+
+  .inner {
+    position: relative;
+    z-index: 4;
+    padding: 42px 100px 38px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .logo-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    margin-bottom: 16px;
+  }
+  .org-text { text-align: left; }
+  .org-name {
+    font-family: 'Cinzel', serif;
+    font-weight: 700;
+    font-size: 21px;
+    color: #0F2D5C;
+    letter-spacing: 0.07em;
+    line-height: 1.1;
+  }
+  .org-sub {
+    font-family: 'EB Garamond', serif;
+    font-style: italic;
+    font-size: 13.5px;
+    color: #546070;
+    letter-spacing: 0.025em;
+    margin-top: 3px;
+  }
+
+  .rule {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    margin: 13px 0;
+  }
+  .rule-line {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #C9963A 25%, #C9963A 75%, transparent);
+  }
+  .rule-diamond {
+    width: 7px; height: 7px;
+    background: #C9963A;
+    transform: rotate(45deg);
+    flex-shrink: 0;
+  }
+  .rule-dot {
+    width: 4px; height: 4px;
+    background: rgba(201,150,58,0.55);
+    transform: rotate(45deg);
+    flex-shrink: 0;
+  }
+
+  .cert-eyebrow {
+    font-family: 'Cinzel', serif;
+    font-weight: 600;
+    font-size: 9px;
+    letter-spacing: 0.35em;
+    color: rgba(15, 45, 92, 0.55);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .cert-of {
+    font-family: 'Cinzel', serif;
+    font-weight: 400;
+    font-size: 10px;
+    letter-spacing: 0.42em;
+    color: #C9963A;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+  }
+  .cert-title {
+    font-family: 'Cinzel', serif;
+    font-weight: 700;
+    font-size: 33px;
+    color: #0F2D5C;
+    letter-spacing: 0.09em;
+    line-height: 1;
+    margin-bottom: 14px;
+  }
+
+  .presented {
+    font-family: 'EB Garamond', serif;
+    font-style: italic;
+    font-size: 17px;
+    color: #546070;
+    margin-bottom: 7px;
+  }
+
+  .name {
+    font-family: 'Playfair Display', serif;
+    font-weight: 800;
+    font-size: 54px;
+    color: #0F2D5C;
+    line-height: 1.05;
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+  }
+  .reg-line {
+    font-family: 'Cinzel', serif;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: #546070;
+    margin-bottom: 14px;
+  }
+
+  .body-copy {
+    font-family: 'EB Garamond', serif;
+    font-size: 17px;
+    color: #3D4658;
+    line-height: 1.65;
+    max-width: 620px;
+    margin-bottom: 6px;
+  }
+  .subject {
+    font-family: 'Cinzel', serif;
+    font-weight: 600;
+    font-size: 16px;
+    color: #0F2D5C;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+  .school-line {
+    font-family: 'EB Garamond', serif;
+    font-size: 17px;
+    color: #3D4658;
+    line-height: 1.5;
+    max-width: 620px;
+    margin-bottom: 14px;
+  }
+  .grade {
+    font-family: 'EB Garamond', serif;
+    font-style: italic;
+    font-size: 16px;
+    color: #B8892E;
+    margin-bottom: 16px;
+  }
+
+  .sig-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    width: 100%;
+    padding: 0 8px;
+    margin-top: 4px;
+    gap: 16px;
+  }
+  .sig {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    max-width: 200px;
+  }
+  .sig-script {
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    font-size: 26px;
+    color: #0F2D5C;
+    line-height: 1;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+  }
+  .sig-rule {
+    width: 130px;
+    height: 1px;
+    background: rgba(30,127,212,0.28);
+  }
+  .sig-name-label {
+    font-family: 'Cinzel', serif;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    color: #3D4658;
+    text-transform: uppercase;
+    text-align: center;
+  }
+  .sig-title-label {
+    font-family: 'EB Garamond', serif;
+    font-style: italic;
+    font-size: 12.5px;
+    color: #7A8FA8;
+    text-align: center;
+  }
+
+  .seal-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+  .seal-label {
+    font-family: 'Cinzel', serif;
+    font-size: 8px;
+    letter-spacing: 0.15em;
+    color: rgba(30,127,212,0.6);
+    text-transform: uppercase;
+  }
+
+  .qr-slot {
+    width: 88px;
+    height: 88px;
+    border: 1px dashed rgba(30,127,212,0.35);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Lato', sans-serif;
+    font-size: 8px;
+    color: rgba(30,127,212,0.45);
+    text-align: center;
+    padding: 6px;
+    line-height: 1.35;
+  }
+
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    width: 100%;
+    margin-top: 18px;
+    padding-top: 11px;
+    border-top: 1px solid rgba(201,150,58,0.2);
+    gap: 12px;
+  }
+  .footer-item {
+    font-family: 'Lato', sans-serif;
+    font-size: 9px;
+    font-weight: 300;
+    letter-spacing: 0.06em;
+    color: #8A9AAE;
+    text-transform: uppercase;
+    flex: 1;
+    text-align: center;
+  }
+  .footer-item:first-child { text-align: left; }
+  .footer-item:last-child { text-align: right; }
+  .footer-item strong {
+    font-weight: 700;
+    color: #546070;
+    display: block;
+    margin-top: 4px;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    font-size: 10px;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+
+<div class="cert">
+  <div class="band-top">
+    <svg width="100%" height="16" preserveAspectRatio="none" style="display:block;">
+      <defs>
+        <pattern id="ovals-top" x="0" y="0" width="44" height="16" patternUnits="userSpaceOnUse">
+          <rect x="8" y="3" width="28" height="10" rx="5" ry="6" fill="rgba(255,255,255,0.2)"/>
+          <polygon points="22,5 23.2,8.5 27,8.5 24.2,10.5 25.2,14 22,12 18.8,14 19.8,10.5 17,8.5 20.8,8.5" fill="#F5C518" opacity="0.85"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="16" fill="#1E7FD4"/>
+      <rect width="100%" height="16" fill="url(#ovals-top)"/>
+    </svg>
+  </div>
+  <div class="band-top-gold"></div>
+
+  <div class="frame-outer"></div>
+  <div class="frame-inner"></div>
+
+  <div class="corner tl">
+    <svg viewBox="0 0 54 54" fill="none">
+      <path d="M2 52 L2 2 L52 2" stroke="#C9963A" stroke-width="1.8" fill="none"/>
+      <path d="M8 46 L8 8 L46 8" stroke="rgba(201,150,58,0.3)" stroke-width="0.6" fill="none"/>
+      <circle cx="2" cy="2" r="3.5" fill="#C9963A"/>
+      <path d="M2 20 L2 2 L20 2" stroke="#1E7FD4" stroke-width="2.5" fill="none" stroke-linecap="square"/>
+      <circle cx="30" cy="2" r="1.8" fill="rgba(201,150,58,0.6)"/>
+      <circle cx="2" cy="30" r="1.8" fill="rgba(201,150,58,0.6)"/>
+      <path d="M22 22 C20 18 16 16 14 14 C16 12 20 12 22 16 C24 12 28 12 30 14 C28 16 24 18 22 22 Z" fill="rgba(201,150,58,0.5)"/>
+    </svg>
+  </div>
+  <div class="corner tr">
+    <svg viewBox="0 0 54 54" fill="none">
+      <path d="M2 52 L2 2 L52 2" stroke="#C9963A" stroke-width="1.8" fill="none"/>
+      <path d="M8 46 L8 8 L46 8" stroke="rgba(201,150,58,0.3)" stroke-width="0.6" fill="none"/>
+      <circle cx="2" cy="2" r="3.5" fill="#C9963A"/>
+      <path d="M2 20 L2 2 L20 2" stroke="#1E7FD4" stroke-width="2.5" fill="none" stroke-linecap="square"/>
+      <circle cx="30" cy="2" r="1.8" fill="rgba(201,150,58,0.6)"/>
+      <circle cx="2" cy="30" r="1.8" fill="rgba(201,150,58,0.6)"/>
+      <path d="M22 22 C20 18 16 16 14 14 C16 12 20 12 22 16 C24 12 28 12 30 14 C28 16 24 18 22 22 Z" fill="rgba(201,150,58,0.5)"/>
+    </svg>
+  </div>
+  <div class="corner bl">
+    <svg viewBox="0 0 54 54" fill="none">
+      <path d="M2 52 L2 2 L52 2" stroke="#C9963A" stroke-width="1.8" fill="none"/>
+      <path d="M8 46 L8 8 L46 8" stroke="rgba(201,150,58,0.3)" stroke-width="0.6" fill="none"/>
+      <circle cx="2" cy="2" r="3.5" fill="#C9963A"/>
+      <path d="M2 20 L2 2 L20 2" stroke="#1E7FD4" stroke-width="2.5" fill="none" stroke-linecap="square"/>
+    </svg>
+  </div>
+  <div class="corner br">
+    <svg viewBox="0 0 54 54" fill="none">
+      <path d="M2 52 L2 2 L52 2" stroke="#C9963A" stroke-width="1.8" fill="none"/>
+      <path d="M8 46 L8 8 L46 8" stroke="rgba(201,150,58,0.3)" stroke-width="0.6" fill="none"/>
+      <circle cx="2" cy="2" r="3.5" fill="#C9963A"/>
+      <path d="M2 20 L2 2 L20 2" stroke="#1E7FD4" stroke-width="2.5" fill="none" stroke-linecap="square"/>
+    </svg>
+  </div>
+
+  <div class="watermark">
+    <svg width="320" height="320" viewBox="0 0 320 320" fill="none">
+      <circle cx="160" cy="160" r="150" stroke="#1E7FD4" stroke-width="2.5"/>
+      <circle cx="160" cy="160" r="138" stroke="#1E7FD4" stroke-width="0.8"/>
+      <circle cx="160" cy="160" r="124" stroke="#C9963A" stroke-width="1.8"/>
+      <rect x="128" y="130" width="30" height="44" rx="2" fill="#1E7FD4"/>
+      <rect x="128" y="130" width="3" height="44" fill="#C9963A" opacity="0.6"/>
+      <rect x="162" y="130" width="30" height="44" rx="2" fill="#1E7FD4"/>
+      <rect x="162" y="130" width="3" height="44" fill="#C9963A" opacity="0.6"/>
+      <rect x="157" y="128" width="6" height="48" fill="#0F2D5C"/>
+      <path d="M160 80 L165 98 L184 98 L169 110 L174 128 L160 116 L146 128 L151 110 L136 98 L155 98 Z" fill="#F5C518" opacity="0.9"/>
+      <path d="M100 186 C78 174 70 150 76 130" stroke="#1E7FD4" stroke-width="4" fill="none"/>
+      <path d="M88 192 C64 178 56 152 62 128" stroke="#1E7FD4" stroke-width="2" fill="none"/>
+      <path d="M110 194 C90 185 82 160 88 138" stroke="#C9963A" stroke-width="2" fill="none"/>
+      <path d="M220 186 C242 174 250 150 244 130" stroke="#1E7FD4" stroke-width="4" fill="none"/>
+      <path d="M232 192 C256 178 264 152 258 128" stroke="#1E7FD4" stroke-width="2" fill="none"/>
+      <path d="M210 194 C230 185 238 160 232 138" stroke="#C9963A" stroke-width="2" fill="none"/>
+      <path d="M118 224 L160 238 L202 224 L196 248 L160 262 L124 248 Z" fill="#C9963A" opacity="0.7"/>
+      <path id="wm-ring" d="M160 160 m-112,0 a112,112 0 1,1 224,0 a112,112 0 1,1 -224,0" fill="none"/>
+      <text font-family="Cinzel,serif" font-size="12" fill="#0F2D5C" letter-spacing="11">
+        <textPath href="#wm-ring" startOffset="4%">ADHARAEDU · TECH SKILLS · EXCELLENCE · INTEGRITY ·</textPath>
+      </text>
+    </svg>
+  </div>
+
+  <div class="pillar left">
+    <svg width="24" height="300" viewBox="0 0 24 300" fill="none">
+      <line x1="12" y1="0" x2="12" y2="300" stroke="#1E7FD4" stroke-width="1"/>
+      <circle cx="12" cy="40"  r="4"   stroke="#C9963A" stroke-width="1.2" fill="none"/>
+      <circle cx="12" cy="90"  r="2.5" fill="#1E7FD4"/>
+      <rect x="7" y="135" width="10" height="10" transform="rotate(45 12 140)" stroke="#C9963A" stroke-width="1" fill="none"/>
+      <circle cx="12" cy="186" r="4"   fill="#1E7FD4"/>
+      <circle cx="12" cy="230" r="2.5" fill="#1E7FD4"/>
+      <circle cx="12" cy="264" r="4"   stroke="#C9963A" stroke-width="1.2" fill="none"/>
+    </svg>
+  </div>
+  <div class="pillar right">
+    <svg width="24" height="300" viewBox="0 0 24 300" fill="none">
+      <line x1="12" y1="0" x2="12" y2="300" stroke="#1E7FD4" stroke-width="1"/>
+      <circle cx="12" cy="40"  r="4"   stroke="#C9963A" stroke-width="1.2" fill="none"/>
+      <circle cx="12" cy="90"  r="2.5" fill="#1E7FD4"/>
+      <rect x="7" y="135" width="10" height="10" transform="rotate(45 12 140)" stroke="#C9963A" stroke-width="1" fill="none"/>
+      <circle cx="12" cy="186" r="4"   fill="#1E7FD4"/>
+      <circle cx="12" cy="230" r="2.5" fill="#1E7FD4"/>
+      <circle cx="12" cy="264" r="4"   stroke="#C9963A" stroke-width="1.2" fill="none"/>
+    </svg>
+  </div>
+
+  <div class="inner">
+
+    <div class="logo-row">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 50" height="52" width="228" aria-label="AdharaEdu">
+        <rect x="1" y="4" width="38" height="40" rx="12" ry="14" fill="#1E7FD4"/>
+        <polygon points="20,10 23.5,18.5 33,18.5 25.5,24 28.5,33 20,27.5 11.5,33 14.5,24 7,18.5 16.5,18.5" fill="#F5C518"/>
+        <text x="46" y="33" font-family="Arial Black, sans-serif" font-weight="900" font-size="26" fill="#0F2D5C">Adhara</text>
+        <text x="153" y="14" font-family="Arial, sans-serif" font-weight="700" font-style="italic" font-size="12" fill="#1E7FD4">Edu</text>
+        <text x="46" y="46" font-family="Georgia, serif" font-style="italic" font-size="9.5" fill="#546070" letter-spacing="0.3">Schools</text>
+      </svg>
+      <div style="width:1px;height:44px;background:rgba(201,150,58,0.3);margin:0 4px;"></div>
+      <div class="org-text">
+        <div class="org-name">AdharaEdu Schools</div>
+        <div class="org-sub">Structured tech education for secondary schools &middot; Nigeria</div>
+      </div>
+    </div>
+
+    <div class="rule">
+      <div class="rule-line"></div>
+      <div class="rule-dot"></div>
+      <div class="rule-diamond"></div>
+      <div class="rule-dot"></div>
+      <div class="rule-line"></div>
+    </div>
+
+    <div class="cert-eyebrow">Official credential</div>
+    <div class="cert-of">Certificate of</div>
+    <div class="cert-title">Completion</div>
+
+    <div class="rule" style="margin-bottom:17px;">
+      <div class="rule-line"></div>
+      <div class="rule-diamond"></div>
+      <div class="rule-line"></div>
+    </div>
+
+    <div class="presented">This is to certify that</div>
+    <div class="name">Tunde Balogun</div>
+    <div class="reg-line">Reg. CH-SS2-2047</div>
+
+    <div class="body-copy">has successfully completed the</div>
+    <div class="subject">Track 3 — Advanced Tech &amp; Career Readiness</div>
+    <div class="school-line">programme at <strong style="font-weight:600;color:#0F2D5C;">Crown Heights Secondary School</strong></div>
+    <div class="grade">Merit &middot; Average score: 72% &middot; Issued 21 March 2026</div>
+
+    <div class="rule" style="margin-bottom:18px;">
+      <div class="rule-line"></div>
+      <div class="rule-dot"></div>
+      <div class="rule-diamond"></div>
+      <div class="rule-dot"></div>
+      <div class="rule-line"></div>
+    </div>
+
+    <div class="sig-row">
+      <div class="sig" style="align-items:center;">
+        <div class="qr-slot">QR encodes<br>verify URL<br>(PDF only)</div>
+        <div class="sig-name-label" style="margin-top:6px;">Verify</div>
+      </div>
+
+      <div class="seal-col">
+        <svg width="88" height="88" viewBox="0 0 88 88" fill="none">
+          <circle cx="44" cy="44" r="41" fill="rgba(30,127,212,0.05)" stroke="#1E7FD4" stroke-width="1.2"/>
+          <circle cx="44" cy="44" r="35" stroke="rgba(30,127,212,0.12)" stroke-width="0.7"/>
+          <circle cx="44" cy="44" r="29" stroke="#C9963A" stroke-width="1"/>
+          <rect x="30" y="30" width="28" height="28" rx="8" ry="10" fill="#1E7FD4" opacity="0.7"/>
+          <polygon points="44,33 46,39 52,39 47,43 49,49 44,45.5 39,49 41,43 36,39 42,39" fill="#F5C518" opacity="0.9"/>
+          <path id="seal-ring" d="M44 44 m-27,0 a27,27 0 1,1 54,0 a27,27 0 1,1 -54,0" fill="none"/>
+          <text font-family="Cinzel,serif" font-size="5.2" fill="#0F2D5C" opacity="0.65" letter-spacing="4.2">
+            <textPath href="#seal-ring" startOffset="3%">ADHARAEDU · OFFICIAL · 2026</textPath>
+          </text>
+        </svg>
+        <div class="seal-label">Official Seal</div>
+      </div>
+
+      <div class="sig">
+        <div class="sig-script">A. S. Chidera</div>
+        <div class="sig-rule"></div>
+        <div class="sig-name-label">Ali Samuel Chidera</div>
+        <div class="sig-title-label">Founder &amp; Chief Learning Officer</div>
+        <div class="sig-title-label" style="font-style:normal;font-size:11px;color:#546070;">AdharaEdu</div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="footer-item">Date issued<strong>21 March 2026</strong></div>
+      <div class="footer-item">Serial<strong>ADH-CERT-2026-SEED-TUNDE</strong></div>
+      <div class="footer-item">Verify online<strong>yoursite.com/verify-certificate/ADH-CERT-2026-SEED-TUNDE</strong></div>
+    </div>
+
+  </div>
+
+  <div class="band-bottom-gold"></div>
+  <div class="band-bottom">
+    <svg width="100%" height="16" preserveAspectRatio="none" style="display:block;">
+      <defs>
+        <pattern id="ovals-bot" x="0" y="0" width="44" height="16" patternUnits="userSpaceOnUse">
+          <rect x="8" y="3" width="28" height="10" rx="5" ry="6" fill="rgba(255,255,255,0.2)"/>
+          <polygon points="22,5 23.2,8.5 27,8.5 24.2,10.5 25.2,14 22,12 18.8,14 19.8,10.5 17,8.5 20.8,8.5" fill="#F5C518" opacity="0.85"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="16" fill="#1E7FD4"/>
+      <rect width="100%" height="16" fill="url(#ovals-bot)"/>
+    </svg>
+  </div>
+</div>
+
+</body>
+</html>

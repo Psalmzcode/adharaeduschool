@@ -46,8 +46,13 @@ async function upload(path: string, file: File, extra?: Record<string, string>):
 
 // ─── AUTH ───────────────────────────────────────────────────
 export const authApi = {
-  login: (email: string, password: string) =>
-    req('POST', '/auth/login', { email, password }),
+  login: (login: string, password: string) =>
+    req('POST', '/auth/login', { login, password }),
+  /** Passwordless: sends 6-digit code if an active account exists for this email. */
+  requestOtp: (email: string) => req('POST', '/auth/otp/send', { email }),
+  /** Passwordless: verify code — returns `{ user, token }` like login. */
+  verifyOtp: (email: string, code: string) =>
+    req('POST', '/auth/otp/verify', { email, code }),
   register: (data: any) => req('POST', '/auth/register', data),
   me: () => req('GET', '/auth/me'),
   changePassword: (oldPassword: string, newPassword: string) =>
@@ -104,6 +109,10 @@ export const studentsApi = {
   bulkCreate: (schoolId: string, students: any[]) =>
     req('POST', '/students/bulk', { schoolId, students }),
   update: (id: string, data: any) => req('PATCH', `/students/${id}`, data),
+  resetPassword: (id: string) => req('POST', `/students/${id}/reset-password`),
+  deactivate: (id: string) => req('PATCH', `/students/${id}/deactivate`),
+  tutorUpdate: (id: string, data: { firstName?: string; lastName?: string; fullName?: string }) =>
+    req('PATCH', `/students/${id}/tutor-update`, data),
   leaderboard: (params?: any) =>
     req('GET', '/students/leaderboard?' + new URLSearchParams(params || {}).toString()),
 }
@@ -129,6 +138,8 @@ export const tutorsApi = {
     req('PATCH', `/tutors/assignments/${assignmentId}/remove`),
   updateAssignmentExpectation: (assignmentId: string, expectedSessionsPerWeek: number) =>
     req('PATCH', `/tutors/assignments/${assignmentId}/expectation`, { expectedSessionsPerWeek }),
+  deactivate: (id: string) => req('PATCH', `/tutors/${id}/deactivate`),
+  setVerified: (id: string, isVerified: boolean) => req('PATCH', `/tutors/${id}/verify`, { isVerified }),
 }
 
 // ─── CLASS PERFORMANCE (Phase D roll-up) ────────────────────
@@ -145,8 +156,14 @@ export const classPerformanceApi = {
 
 // ─── MODULES / CURRICULUM ───────────────────────────────────
 export const modulesApi = {
-  all: (track?: string) =>
-    req('GET', '/modules' + (track ? `?track=${track}` : '')),
+  /** For TRACK_3, pass `track3Stack` (`PYTHON_FLASK` | `REACT_NODE`) so modules 3–4 match the tutor’s class assignment. */
+  all: (track?: string, track3Stack?: string) => {
+    const p = new URLSearchParams()
+    if (track) p.set('track', track)
+    if (track3Stack) p.set('track3Stack', track3Stack)
+    const q = p.toString()
+    return req('GET', '/modules' + (q ? `?${q}` : ''))
+  },
   create: (data: {
     track: string
     number: number
@@ -171,6 +188,31 @@ export const modulesApi = {
     req('PATCH', '/modules/class-progress/scores', data),
   advanceClass: (data: { schoolId: string; className: string; moduleId: string; passMark?: number }) =>
     req('PATCH', '/modules/class-progress/advance', data),
+}
+
+// ─── CURRICULUM (canonical lessons + class next-lesson pointer) ─
+export const curriculumApi = {
+  lessonsByModule: (moduleId: string, includeUnpublished?: boolean) => {
+    const q = includeUnpublished ? '?includeUnpublished=true' : ''
+    return req('GET', `/curriculum/modules/${encodeURIComponent(moduleId)}/lessons${q}`)
+  },
+  getLesson: (id: string) => req('GET', `/curriculum/lessons/${encodeURIComponent(id)}`),
+  classState: (schoolId: string, className: string, track: string, track3Stack?: string) => {
+    const p = new URLSearchParams({ schoolId, className, track })
+    if (track3Stack) p.set('track3Stack', track3Stack)
+    return req('GET', `/curriculum/class-state?${p}`)
+  },
+  createLesson: (data: {
+    moduleId: string
+    title: string
+    position?: number
+    objective?: string
+    estimatedDurationMins?: number
+    isPublished?: boolean
+  }) => req('POST', '/curriculum/lessons', data),
+  updateLesson: (id: string, data: any) =>
+    req('PATCH', `/curriculum/lessons/${encodeURIComponent(id)}`, data),
+  deleteLesson: (id: string) => req('DELETE', `/curriculum/lessons/${encodeURIComponent(id)}`),
 }
 
 // ─── ATTENDANCE ─────────────────────────────────────────────
@@ -201,14 +243,21 @@ export const cbtApi = {
   // Public — student login to exam
   login: (regNumber: string, token: string, examId: string) =>
     req('POST', '/cbt/login', { regNumber, token, examId }),
+  /** Public — student login to a scheduled exam (time-gated). */
+  loginSchedule: (regNumber: string, token: string, scheduleId: string) =>
+    req('POST', '/cbt/login-schedule', { regNumber, token, scheduleId }),
   // Tutor
   myExams: () => req('GET', '/cbt'),
   create: (data: any) => req('POST', '/cbt', data),
   update: (id: string, data: any) => req('PATCH', `/cbt/${id}`, data),
   publish: (id: string) => req('PATCH', `/cbt/${id}/publish`),
+  generateQuestions: (data: { moduleId: string; includeModuleIds?: string[]; count?: number; difficulty?: string }) =>
+    req('POST', '/cbt/generate-questions', data),
   // Super Admin
   all: (params?: any) =>
     req('GET', '/cbt?' + new URLSearchParams(params || {}).toString()),
+  one: (id: string, includeAnswers?: boolean) =>
+    req('GET', `/cbt/${encodeURIComponent(id)}${includeAnswers ? '?includeAnswers=true' : ''}`),
   vet: (id: string, vetted: boolean) =>
     req('PATCH', `/cbt/${id}/vet`, { vetted }),
   attempts: (examId: string) => req('GET', `/cbt/${examId}/attempts`),
@@ -343,7 +392,8 @@ export const usersApi = {
 // ─── SESSIONS (lesson logging) ───────────────────────────────
 export const sessionsApi = {
   start: (data: any) => req('POST', '/sessions/start', data),
-  end: (id: string, notes?: string) => req('PATCH', `/sessions/${id}/end`, { notes }),
+  end: (id: string, studentsPresent: number, notes?: string) =>
+    req('PATCH', `/sessions/${id}/end`, { studentsPresent, notes }),
   active: () => req('GET', '/sessions/active'),
   myHistory: () => req('GET', '/sessions/my-sessions'),
   bySchool: (schoolId: string, opts?: { from?: string; to?: string; limit?: number }) => {
@@ -387,7 +437,7 @@ export const payrollApi = {
         : dataOrTutorId
     return req('POST', '/payroll/calculate', payload)
   },
-  markPaid: (id: string) => req('PATCH', `/payroll/${id}/pay`),
+  markPaid: (id: string) => req('PATCH', `/payroll/${id}/mark-paid`),
 }
 
 // ─── ASSIGNMENTS ─────────────────────────────────────────────
@@ -459,18 +509,19 @@ export const examSchedulesApi = {
   schedule: (data: any) => req('POST', '/exam-schedules', data),
   /** Student/parent — backend: GET /exam-schedules/mine (not GET /exam-schedules, which is tutor/admin list). */
   mine: () => req('GET', '/exam-schedules/mine'),
-  all: (schoolId?: string, className?: string) => {
-    const p = new URLSearchParams()
-    if (schoolId) p.set('schoolId', schoolId)
-    if (className) p.set('className', className)
-    return req('GET', `/exam-schedules?${p}`)
+  /** Tutor/admin list for a school. Optionally filter by className client-side. */
+  all: async (schoolId?: string, className?: string) => {
+    if (!schoolId) return []
+    const rows = await req('GET', `/exam-schedules/school/${encodeURIComponent(schoolId)}`)
+    const arr = Array.isArray(rows) ? rows : []
+    return className ? arr.filter((r: any) => String(r?.className || '') === String(className)) : arr
   },
-  upcoming: (schoolId: string, className?: string) => {
-    const p = new URLSearchParams({ schoolId })
-    if (className) p.set('className', className)
-    return req('GET', `/exam-schedules/upcoming?${p}`)
-  },
-  cancel: (id: string) => req('PATCH', `/exam-schedules/${id}/cancel`),
+  /** Update schedule (e.g., change time/date/venue/duration/status/isActive/accessCode). */
+  update: (id: string, data: any) => req('PATCH', `/exam-schedules/${encodeURIComponent(id)}`, data),
+  /** Cancel schedule (sets status=CANCELLED on backend). */
+  cancel: (id: string) => req('DELETE', `/exam-schedules/${encodeURIComponent(id)}`),
+  /** Tutor/admin — students can then see scores for “hold results” schedules. */
+  releaseResults: (id: string) => req('POST', `/exam-schedules/${encodeURIComponent(id)}/release-results`),
 }
 
 // ─── PAYROLL ─────────────────────────────────────────────────

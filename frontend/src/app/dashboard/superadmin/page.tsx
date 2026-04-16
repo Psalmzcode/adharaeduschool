@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
 import { ClassPerformancePanel } from '@/components/ClassPerformancePanel'
-import { schoolsApi, tutorsApi, paymentsApi, reportsApi, cbtApi, payrollApi, tracksApi, practicalsApi, modulesApi, schoolClassesApi } from '@/lib/api'
+import { schoolsApi, tutorsApi, paymentsApi, reportsApi, cbtApi, payrollApi, tracksApi, practicalsApi, modulesApi, schoolClassesApi, curriculumApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { SACertificates } from './extras'
 
@@ -36,15 +36,87 @@ const DEFAULT_PAYROLL_SUMMARY = { totalPayroll: 0, paid: 0, unpaid: 0, tutorCoun
 function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
   if (!open) return null
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 620, background: 'var(--navy2)', border: '1px solid var(--border)', borderRadius: 24, overflow: 'hidden' }}>
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(4px)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 720,
+          maxHeight: '90vh',
+          background: 'var(--navy2)',
+          border: '1px solid var(--border)',
+          borderRadius: 18,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--white)' }}>{title}</h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20 }}>✕</button>
         </div>
-        <div style={{ padding: 24 }}>{children}</div>
+        <div style={{ padding: 16, overflow: 'auto' }}>{children}</div>
       </div>
     </div>
+  )
+}
+
+function ConfirmModal({
+  open,
+  title,
+  message,
+  confirmText = 'Confirm',
+  cancelText = 'Cancel',
+  danger,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean
+  title: string
+  message: React.ReactNode
+  confirmText?: string
+  cancelText?: string
+  danger?: boolean
+  busy?: boolean
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title={title}>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <div className="text-sm text-muted" style={{ lineHeight: 1.6 }}>
+          {message}
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} disabled={busy}>
+            {cancelText}
+          </button>
+          <button
+            type="button"
+            className={`btn ${danger ? 'btn-danger' : 'btn-primary'} btn-sm`}
+            onClick={onConfirm}
+            disabled={busy}
+            style={{ justifyContent: 'center', minWidth: 140 }}
+          >
+            {busy ? 'Please wait…' : confirmText}
+          </button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -235,6 +307,8 @@ function SATutors() {
   const [assignTutorId, setAssignTutorId] = useState('')
   const [saving, setSaving] = useState(false)
   const [assigning, setAssigning] = useState(false)
+  const [deactivatingId, setDeactivatingId] = useState<string>('')
+  const [confirmTutor, setConfirmTutor] = useState<any>(null)
   const [schoolClasses, setSchoolClasses] = useState<any[]>([])
   const [loadingSchoolClasses, setLoadingSchoolClasses] = useState(false)
   const [newTutor, setNewTutor] = useState({
@@ -242,15 +316,19 @@ function SATutors() {
     lastName: '',
     email: '',
     phone: '',
-    bio: '',
-    specializations: '',
+    specializations: [] as string[],
     tracks: [] as string[],
   })
+  const [specInput, setSpecInput] = useState('')
+  const [specOpen, setSpecOpen] = useState(false)
+  const specRef = useRef<HTMLDivElement | null>(null)
   const [assignForm, setAssignForm] = useState({
     schoolId: '',
     termLabel: '',
     startDate: new Date().toISOString().slice(0, 10),
     expectedSessionsPerWeek: 3,
+    /** Used when assigning TRACK_3 — drives student curriculum for modules 3–4 */
+    track3Stack: 'PYTHON_FLASK' as 'PYTHON_FLASK' | 'REACT_NODE',
   })
   /** Tracks from tutor profile — one section of classes per track */
   const [assignTutorTracks, setAssignTutorTracks] = useState<string[]>([])
@@ -260,6 +338,15 @@ function SATutors() {
 
   const normTrack = (t: string) => String(t || '').trim().toUpperCase()
   const slotKey = (track: string, className: string) => `${normTrack(track)}::${String(className)}`
+  /** Matches backend: academic year + current term from school profile. */
+  const termLabelFromSchool = (school: any) => {
+    const y = String(school?.academicYearLabel || '').trim()
+    const cur = String(school?.currentTermLabel || '').trim()
+    if (y && cur) return `${y} ${cur}`.replace(/\s+/g, ' ').trim()
+    if (cur) return cur
+    if (y) return y
+    return ''
+  }
   const trackLabel = (code: string) =>
     trackArr.find((x: any) => normTrack(x.code) === normTrack(code))?.name ||
     String(code).replace('TRACK_', 'Track ')
@@ -277,13 +364,13 @@ function SATutors() {
         lastName: newTutor.lastName.trim(),
         email: newTutor.email.trim().toLowerCase(),
         phone: newTutor.phone.trim() || undefined,
-        bio: newTutor.bio.trim() || undefined,
-        specializations: newTutor.specializations.split(',').map((s) => s.trim()).filter(Boolean),
+        specializations: Array.from(new Set((newTutor.specializations || []).map((s) => String(s || '').trim()).filter(Boolean))),
         tracks: newTutor.tracks,
       })
       setData([created, ...arr])
       setShowAdd(false)
-      setNewTutor({ firstName: '', lastName: '', email: '', phone: '', bio: '', specializations: '', tracks: [] })
+      setNewTutor({ firstName: '', lastName: '', email: '', phone: '', specializations: [], tracks: [] })
+      setSpecInput('')
       notify.success('Tutor created. Default password is Tutor@123')
     } catch (e: any) {
       notify.fromError(e)
@@ -292,6 +379,77 @@ function SATutors() {
     }
   }
 
+  const CURATED_SPECS = [
+    'Digital Foundations',
+    'Scratch',
+    'Computer Basics',
+    'Typing & Productivity',
+    'Internet Safety',
+    'HTML/CSS',
+    'JavaScript',
+    'TypeScript',
+    'Python',
+    'Databases',
+    'Git/GitHub',
+    'React',
+    'Node.js',
+    'API Design',
+    'CBT Authoring',
+    'Practical Assessments',
+  ]
+  const existingSpecs = Array.from(
+    new Set(
+      (arr || [])
+        .flatMap((t: any) => (Array.isArray(t?.specializations) ? t.specializations : []))
+        .map((s: any) => String(s || '').trim())
+        .filter(Boolean),
+    ),
+  )
+  const specPool = Array.from(new Set([...CURATED_SPECS, ...existingSpecs])).sort((a, b) => a.localeCompare(b))
+  const specQuery = specInput.trim().toLowerCase()
+  const specSuggestions = specQuery
+    ? specPool.filter((s) => s.toLowerCase().includes(specQuery) && !(newTutor.specializations || []).includes(s)).slice(0, 8)
+    : specPool.filter((s) => !(newTutor.specializations || []).includes(s)).slice(0, 8)
+  const addSpec = (value: string) => {
+    const v = String(value || '').trim()
+    if (!v) return
+    setNewTutor((prev) => {
+      const next = Array.from(new Set([...(prev.specializations || []), v]))
+      return { ...prev, specializations: next }
+    })
+    setSpecInput('')
+  }
+  const removeSpec = (value: string) => {
+    setNewTutor((prev) => ({ ...prev, specializations: (prev.specializations || []).filter((s) => s !== value) }))
+  }
+
+  const deactivateTutor = async (tutor: any) => {
+    const id = String(tutor?.id || '')
+    if (!id) return
+    setDeactivatingId(id)
+    try {
+      await tutorsApi.deactivate(id)
+      setData((prev: any) => (Array.isArray(prev) ? prev.filter((t: any) => t.id !== id) : prev))
+      notify.success('Tutor deactivated.')
+    } catch (e: any) {
+      notify.fromError(e)
+    } finally {
+      setDeactivatingId('')
+    }
+  }
+
+  useEffect(() => {
+    if (!specOpen) return
+    const onDown = (ev: MouseEvent) => {
+      const el = specRef.current
+      if (!el) return
+      if (ev.target && el.contains(ev.target as Node)) return
+      setSpecOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [specOpen])
+
   const openAssign = (tutorId: string) => {
     const tutor = arr.find((t: any) => t.id === tutorId)
     const raw = Array.isArray(tutor?.tracks) ? tutor.tracks.map((x: any) => String(x)) : []
@@ -299,13 +457,23 @@ function SATutors() {
     setSelectedClassSlots([])
     assignSeedRef.current = ''
     setAssignTutorId(tutorId)
+    const firstSchool = schoolArr[0]
     setAssignForm({
-      schoolId: schoolArr[0]?.id || '',
-      termLabel: '',
+      schoolId: firstSchool?.id || '',
+      termLabel: termLabelFromSchool(firstSchool),
       startDate: new Date().toISOString().slice(0, 10),
       expectedSessionsPerWeek: 3,
+      track3Stack: 'PYTHON_FLASK',
     })
   }
+
+  useEffect(() => {
+    if (!assignTutorId || !assignForm.schoolId) return
+    const sch = schoolArr.find((s: any) => s.id === assignForm.schoolId)
+    if (!sch) return
+    const next = termLabelFromSchool(sch)
+    if (next) setAssignForm((f) => (f.termLabel === next ? f : { ...f, termLabel: next }))
+  }, [assignTutorId, assignForm.schoolId])
 
   useEffect(() => {
     const loadSchoolClasses = async () => {
@@ -406,6 +574,7 @@ function SATutors() {
           termLabel: assignForm.termLabel,
           startDate: startIso,
           expectedSessionsPerWeek: assignForm.expectedSessionsPerWeek,
+          ...(normTrack(track) === 'TRACK_3' ? { track3Stack: assignForm.track3Stack } : {}),
         })
         createdRows.push(...(Array.isArray(assignment) ? assignment : [assignment]))
       }
@@ -433,6 +602,7 @@ function SATutors() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
           {arr.map((t: any) => {
+            if (t?.user?.isActive === false) return null
             const name = `${t.user?.firstName} ${t.user?.lastName}`
             const initials = name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
             const schoolNames = (t.assignments || [])
@@ -479,6 +649,16 @@ function SATutors() {
                   >
                     Assign school
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    style={{ fontSize: 11, marginLeft: 8 }}
+                    disabled={deactivatingId === t.id}
+                    onClick={(e) => { e.stopPropagation(); setConfirmTutor(t) }}
+                    title="Deactivate tutor (disable login)"
+                  >
+                    {deactivatingId === t.id ? 'Deactivating…' : 'Delete'}
+                  </button>
                   <span className="text-xs text-muted" style={{ marginLeft: 8 }}>Click card for full profile</span>
                 </div>
               </div>
@@ -487,16 +667,93 @@ function SATutors() {
         </div>
       )}
 
+      <ConfirmModal
+        open={!!confirmTutor}
+        title="Deactivate tutor?"
+        message={
+          <div>
+            This will disable the tutor’s login and hide them from lists.
+            <div style={{ marginTop: 10, padding: 10, borderRadius: 10, border: '1px solid var(--border2)', background: 'var(--muted3)' }}>
+              <div className="text-white" style={{ fontWeight: 700 }}>
+                {confirmTutor ? `${confirmTutor.user?.firstName ?? ''} ${confirmTutor.user?.lastName ?? ''}`.trim() || 'Tutor' : 'Tutor'}
+              </div>
+              <div className="text-xs text-muted" style={{ wordBreak: 'break-all' }}>{confirmTutor?.user?.email}</div>
+            </div>
+          </div>
+        }
+        confirmText="Deactivate"
+        cancelText="Cancel"
+        danger
+        busy={!!confirmTutor && deactivatingId === confirmTutor?.id}
+        onClose={() => { if (!deactivatingId) setConfirmTutor(null) }}
+        onConfirm={() => { if (confirmTutor) deactivateTutor(confirmTutor).finally(() => setConfirmTutor(null)) }}
+      />
+
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Tutor">
         <form onSubmit={submitTutor} style={{ display: 'grid', gap: 12 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
             <div><label className="form-label">First name</label><input required className="form-input" value={newTutor.firstName} onChange={(e) => setNewTutor({ ...newTutor, firstName: e.target.value })} /></div>
             <div><label className="form-label">Last name</label><input required className="form-input" value={newTutor.lastName} onChange={(e) => setNewTutor({ ...newTutor, lastName: e.target.value })} /></div>
           </div>
           <div><label className="form-label">Email</label><input required type="email" className="form-input" value={newTutor.email} onChange={(e) => setNewTutor({ ...newTutor, email: e.target.value })} /></div>
           <div><label className="form-label">Phone</label><input className="form-input" value={newTutor.phone} onChange={(e) => setNewTutor({ ...newTutor, phone: e.target.value })} /></div>
-          <div><label className="form-label">Specializations (comma separated)</label><input className="form-input" placeholder="React, JavaScript, Python" value={newTutor.specializations} onChange={(e) => setNewTutor({ ...newTutor, specializations: e.target.value })} /></div>
-          <div><label className="form-label">Bio</label><textarea className="form-input" rows={3} value={newTutor.bio} onChange={(e) => setNewTutor({ ...newTutor, bio: e.target.value })} /></div>
+          <div>
+            <label className="form-label">Specializations</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {(newTutor.specializations || []).map((s) => (
+                <span key={s} className="badge badge-teal" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 11 }}>
+                  {s}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ padding: 0, minWidth: 18, height: 18, lineHeight: '18px', fontSize: 12 }}
+                    onClick={() => removeSpec(s)}
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div ref={specRef} style={{ position: 'relative' }}>
+              <input
+                className="form-input"
+                placeholder="Type a skill and press Enter…"
+                value={specInput}
+                onChange={(e) => setSpecInput(e.target.value)}
+                onFocus={() => setSpecOpen(true)}
+                onClick={() => setSpecOpen(true)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    addSpec(specInput)
+                    setSpecOpen(true)
+                  }
+                  if (e.key === ',' ) {
+                    e.preventDefault()
+                    addSpec(specInput)
+                    setSpecOpen(true)
+                  }
+                }}
+              />
+              {specOpen && specSuggestions.length > 0 && (
+                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 20, background: 'var(--navy2)', border: '1px solid var(--border2)', borderRadius: 10, overflow: 'hidden' }}>
+                  {specSuggestions.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className="btn btn-ghost"
+                      style={{ width: '100%', justifyContent: 'flex-start', borderRadius: 0, padding: '10px 12px' }}
+                      onClick={() => { addSpec(s); setSpecOpen(false) }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="text-muted text-xs mt-6">Suggestions appear as you type. Press Enter to add a custom specialization.</div>
+          </div>
           <div>
             <label className="form-label">Program tracks (select all that apply)</label>
             <p className="text-muted text-xs" style={{ margin: '0 0 8px', lineHeight: 1.45 }}>
@@ -556,7 +813,14 @@ function SATutors() {
               )
             })()}
           </div>
-          <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>{saving ? 'Creating…' : 'Create Tutor'}</button>
+          <button
+            type="submit"
+            className="btn btn-primary btn-sm"
+            style={{ justifySelf: 'center', justifyContent: 'center', minWidth: 160 }}
+            disabled={saving}
+          >
+            {saving ? 'Creating…' : 'Create Tutor'}
+          </button>
         </form>
       </Modal>
 
@@ -657,9 +921,39 @@ function SATutors() {
             )}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <div><label className="form-label">Term label</label><input required className="form-input" placeholder="2025/2026 Term 2" value={assignForm.termLabel} onChange={(e) => setAssignForm({ ...assignForm, termLabel: e.target.value })} /></div>
+            <div>
+              <label className="form-label">Term label</label>
+              <p className="text-muted text-xs mb-4" style={{ lineHeight: 1.45 }}>
+                Auto-filled from the school’s <strong className="text-white">academic year</strong> and <strong className="text-white">current term</strong>. When a <strong className="text-white">new term</strong> starts, update those fields on the school first, then assign tutors again — a new assignment row is created for the new term. Older term assignments for the same class are closed automatically when the new one is created; <strong className="text-white">grades, attendance, and module progress stay in the database</strong> for reporting and student history.
+              </p>
+              <input
+                className="form-input"
+                placeholder="e.g. 2025/2026 Second Term"
+                value={assignForm.termLabel}
+                onChange={(e) => setAssignForm({ ...assignForm, termLabel: e.target.value })}
+              />
+            </div>
             <div><label className="form-label">Start date</label><input required type="date" className="form-input" value={assignForm.startDate} onChange={(e) => setAssignForm({ ...assignForm, startDate: e.target.value })} /></div>
           </div>
+          {assignTutorTracks.some((t) => normTrack(t) === 'TRACK_3') && (
+            <div>
+              <label className="form-label">Track 3 curriculum (modules 3–4)</label>
+              <select
+                className="form-input"
+                value={assignForm.track3Stack}
+                onChange={(e) =>
+                  setAssignForm({
+                    ...assignForm,
+                    track3Stack: e.target.value as 'PYTHON_FLASK' | 'REACT_NODE',
+                  })
+                }
+              >
+                <option value="PYTHON_FLASK">Python / Flask</option>
+                <option value="REACT_NODE">React / Node (backend)</option>
+              </select>
+              <p className="text-muted text-xs mt-4">Students in assigned SS3 Track 3 classes see this stack for the branching modules. Applies to each Track 3 assignment you create in this form.</p>
+            </div>
+          )}
           <div>
             <label className="form-label">Expected sessions per week (per class)</label>
             <input
@@ -673,7 +967,14 @@ function SATutors() {
             />
             <p className="text-muted text-xs mt-4">Used for “delivered vs expected” on session coverage (1–14). Default 3.</p>
           </div>
-          <button type="submit" className="btn btn-primary btn-sm" disabled={assigning}>{assigning ? 'Assigning…' : 'Assign Tutor'}</button>
+          <button
+            type="submit"
+            className="btn btn-primary btn-sm"
+            style={{ justifySelf: 'end', justifyContent: 'center', minWidth: 160 }}
+            disabled={assigning}
+          >
+            {assigning ? 'Assigning…' : 'Assign Tutor'}
+          </button>
         </form>
       </Modal>
     </div>
@@ -747,6 +1048,9 @@ function SAAssessments() {
   const arr = Array.isArray(exams) ? exams : []
   const schoolArr = Array.isArray(schools) ? schools : []
   const [vetted, setVetted] = useState<Record<string, boolean>>({})
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewExam, setPreviewExam] = useState<any>(null)
   const [schoolId, setSchoolId] = useState('')
   const [loadingPracticals, setLoadingPracticals] = useState(true)
   const [practicalSummary, setPracticalSummary] = useState({ tasks: 0, submissions: 0, graded: 0, passRate: 0, pending: 0 })
@@ -822,8 +1126,68 @@ function SAAssessments() {
     } catch (e: any) { notify.fromError(e) }
   }
 
+  const openPreview = async (id: string) => {
+    setPreviewOpen(true)
+    setPreviewLoading(true)
+    setPreviewExam(null)
+    try {
+      const exam = await cbtApi.one(id, true)
+      setPreviewExam(exam)
+    } catch (e: any) {
+      notify.fromError(e, 'Could not load questions')
+      setPreviewOpen(false)
+    }
+    setPreviewLoading(false)
+  }
+
   return (
     <div>
+      <Modal open={previewOpen} onClose={() => { setPreviewOpen(false); setPreviewExam(null) }} title="Preview CBT questions">
+        {previewLoading ? (
+          <div className="text-muted text-sm">Loading questions…</div>
+        ) : previewExam?.questions?.length ? (
+          <div style={{ display: 'grid', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span className="badge badge-info">{previewExam.track?.replace('TRACK_', 'Track ')}</span>
+              <span className="badge badge-teal">{previewExam.durationMins} min</span>
+              <span className="text-muted text-xs">{previewExam.questions.length} questions</span>
+            </div>
+            {previewExam.questions.map((q: any) => (
+              <div key={q.id || q.number} style={{ border: '1px solid var(--border2)', borderRadius: 12, padding: 12 }}>
+                <div style={{ fontWeight: 700, color: 'var(--white)', marginBottom: 10 }}>{`Q${q.number}. ${q.questionText}`}</div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {(q.options || []).map((opt: string, idx: number) => {
+                    const isCorrect = idx === q.correctIndex
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 10,
+                          border: `1px solid ${isCorrect ? 'rgba(34,197,94,0.35)' : 'var(--border2)'}`,
+                          background: isCorrect ? 'rgba(34,197,94,0.10)' : 'var(--muted3)',
+                          color: isCorrect ? '#4ADE80' : 'var(--white)',
+                          fontSize: 13,
+                        }}
+                      >
+                        <strong style={{ marginRight: 8 }}>{String.fromCharCode(65 + idx)}.</strong> {opt}
+                      </div>
+                    )
+                  })}
+                </div>
+                {q.explanation && (
+                  <div className="text-muted text-xs" style={{ marginTop: 10, lineHeight: 1.6 }}>
+                    <strong style={{ color: 'var(--muted)' }}>Explanation:</strong> {q.explanation}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-muted text-sm">No questions found.</div>
+        )}
+      </Modal>
+
       <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Assessment Vetting</h3><div className="text-muted text-sm">Review and approve tutor-built CBT assessments before they go live</div></div></div>
       <div className="card mb-20">
         <div className="flex-between mb-16">
@@ -884,7 +1248,7 @@ function SAAssessments() {
                     {isApproved && <span className="badge badge-success">✓ Vetted &amp; Live</span>}
                     {isRejected && <span className="badge badge-danger">✗ Rejected</span>}
                     {!isApproved && !isRejected && <>
-                      <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}>Preview Questions</button>
+                      <button onClick={() => openPreview(e.id)} className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}>Preview Questions</button>
                       <button onClick={() => vetExam(e.id, true)} className="btn btn-primary btn-sm" style={{ fontSize: 11 }}>✓ Approve &amp; Publish</button>
                       <button onClick={() => vetExam(e.id, false)} className="btn btn-danger btn-sm" style={{ fontSize: 11 }}>✗ Reject</button>
                     </>}
@@ -953,14 +1317,36 @@ function SAPayroll() {
 
   const calcAll = async () => {
     setCalculating(true)
-    const tutors = await tutorsApi.all().catch(()=>[])
+    let tutors: any[] = []
+    try {
+      const t = await tutorsApi.all()
+      tutors = Array.isArray(t) ? t : []
+    } catch (e: any) {
+      notify.fromError(e, 'Could not load tutors')
+      setCalculating(false)
+      return
+    }
     const now = new Date()
+    let ok = 0
+    let failed = 0
     for (const t of Array.isArray(tutors)?tutors:[]) {
       for (const a of t.assignments||[]) {
-        await payrollApi.calculate(t.id, a.schoolId, now.getMonth()+1, now.getFullYear()).catch(()=>{})
+        try {
+          await payrollApi.calculate(t.id, a.schoolId, now.getMonth() + 1, now.getFullYear())
+          ok += 1
+        } catch {
+          failed += 1
+        }
       }
     }
-    payrollApi.all().then(d=>setData(Array.isArray(d)?d:[])).catch(()=>{})
+    try {
+      const refreshed = await payrollApi.all()
+      setData(Array.isArray(refreshed) ? refreshed : [])
+    } catch (e: any) {
+      notify.fromError(e, 'Could not refresh payroll list')
+    }
+    if (failed === 0) notify.success(`Payroll calculated for ${ok} assignment(s)`)
+    else notify.warning(`Payroll calculated for ${ok} assignment(s); ${failed} failed`)
     setCalculating(false)
   }
 
@@ -1128,6 +1514,11 @@ function SAModules() {
   const [loadingClassProgress, setLoadingClassProgress] = useState(false)
   const [advancingClass, setAdvancingClass] = useState(false)
   const [passMark, setPassMark] = useState('50')
+  const [lessonModuleId, setLessonModuleId] = useState('')
+  const [curriculumLessons, setCurriculumLessons] = useState<any[]>([])
+  const [loadingLessons, setLoadingLessons] = useState(false)
+  const [lessonSaving, setLessonSaving] = useState(false)
+  const [lessonForm, setLessonForm] = useState({ title: '', position: '', isPublished: false })
   const [form, setForm] = useState({
     track: trackChoices[0]?.code || 'TRACK_1',
     number: '1',
@@ -1193,6 +1584,19 @@ function SAModules() {
     loadClassProgress()
   }, [selectedSchoolId, selectedClass])
 
+  useEffect(() => {
+    if (!lessonModuleId) {
+      setCurriculumLessons([])
+      return
+    }
+    setLoadingLessons(true)
+    curriculumApi
+      .lessonsByModule(lessonModuleId, true)
+      .then((rows) => setCurriculumLessons(Array.isArray(rows) ? rows : []))
+      .catch(() => setCurriculumLessons([]))
+      .finally(() => setLoadingLessons(false))
+  }, [lessonModuleId])
+
   const filtered = arr
     .filter((m: any) => (filterTrack === 'ALL' ? true : String(m.track) === filterTrack))
     .filter((m: any) => {
@@ -1213,6 +1617,12 @@ function SAModules() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, totalPages)
   const paged = filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
+
+  useEffect(() => {
+    if (filtered.length && !filtered.some((m: any) => m.id === lessonModuleId)) {
+      setLessonModuleId(String(filtered[0].id))
+    }
+  }, [filtered, lessonModuleId])
 
   useEffect(() => {
     setPage(1)
@@ -1327,6 +1737,51 @@ function SAModules() {
     setAdvancingClass(false)
   }
 
+  const addCurriculumLesson = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!lessonModuleId || !lessonForm.title.trim()) {
+      notify.warning('Select a module and enter a lesson title')
+      return
+    }
+    setLessonSaving(true)
+    try {
+      await curriculumApi.createLesson({
+        moduleId: lessonModuleId,
+        title: lessonForm.title.trim(),
+        position: lessonForm.position ? Number(lessonForm.position) : undefined,
+        isPublished: lessonForm.isPublished,
+      })
+      setLessonForm({ title: '', position: '', isPublished: false })
+      const rows = await curriculumApi.lessonsByModule(lessonModuleId, true)
+      setCurriculumLessons(Array.isArray(rows) ? rows : [])
+      notify.success('Curriculum lesson created')
+    } catch (err: any) {
+      notify.error(err?.message || 'Failed to create lesson')
+    }
+    setLessonSaving(false)
+  }
+
+  const toggleLessonPublished = async (id: string, isPublished: boolean) => {
+    try {
+      await curriculumApi.updateLesson(id, { isPublished: !isPublished })
+      const rows = await curriculumApi.lessonsByModule(lessonModuleId, true)
+      setCurriculumLessons(Array.isArray(rows) ? rows : [])
+    } catch (err: any) {
+      notify.error(err?.message || 'Failed to update lesson')
+    }
+  }
+
+  const removeLesson = async (id: string) => {
+    if (!window.confirm('Delete this curriculum lesson? Tutors will no longer need to select it for sessions.')) return
+    try {
+      await curriculumApi.deleteLesson(id)
+      const rows = await curriculumApi.lessonsByModule(lessonModuleId, true)
+      setCurriculumLessons(Array.isArray(rows) ? rows : [])
+    } catch (err: any) {
+      notify.error(err?.message || 'Failed to delete lesson')
+    }
+  }
+
   return (
     <div>
       <div className="flex-between mb-20">
@@ -1373,11 +1828,115 @@ function SAModules() {
               <span className="badge badge-info">Current: Module {classProgress.currentModule.number}</span>
               <span style={{ color: 'var(--white)', fontWeight: 600 }}>{classProgress.currentModule.title}</span>
               <span className="text-muted text-xs">{classProgress.studentCount || 0} students</span>
+              {classProgress.currentLesson?.title && (
+                <span className="badge badge-success" style={{ fontSize: 11 }}>
+                  Next lesson: {classProgress.currentLesson.title}
+                </span>
+              )}
             </div>
           ) : (
             <span className="text-muted text-sm">No active module found for selected class.</span>
           )}
         </div>
+      </div>
+
+      <div className="card mb-20">
+        <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 16 }}>Curriculum lessons (canonical)</div>
+        <div className="text-muted text-sm mb-14">Published lessons make session delivery prescriptive for that module. Class &quot;next lesson&quot; updates when tutors end a session.</div>
+        <div style={{ marginBottom: 16 }}>
+          <label className="form-label">Module</label>
+          <select
+            className="form-input"
+            value={lessonModuleId}
+            onChange={(e) => setLessonModuleId(e.target.value)}
+            disabled={filtered.length === 0}
+            style={{ appearance: 'none' }}
+          >
+            {filtered.map((m: any) => (
+              <option key={m.id} value={m.id}>
+                {String(m.track).replace('TRACK_', 'T ')} · Mod {m.number}: {m.title}
+              </option>
+            ))}
+          </select>
+        </div>
+        <form onSubmit={addCurriculumLesson} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'end', marginBottom: 20 }}>
+          <div style={{ flex: '1 1 200px' }}>
+            <label className="form-label">New lesson title</label>
+            <input
+              className="form-input"
+              value={lessonForm.title}
+              onChange={(e) => setLessonForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="e.g. Introduction to variables"
+            />
+          </div>
+          <div style={{ width: 100 }}>
+            <label className="form-label">Position</label>
+            <input
+              className="form-input"
+              type="number"
+              min={1}
+              value={lessonForm.position}
+              onChange={(e) => setLessonForm((f) => ({ ...f, position: e.target.value }))}
+              placeholder="auto"
+            />
+          </div>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--muted)', fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={lessonForm.isPublished}
+              onChange={(e) => setLessonForm((f) => ({ ...f, isPublished: e.target.checked }))}
+            />
+            Published
+          </label>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={lessonSaving || !lessonModuleId}>
+            {lessonSaving ? 'Saving…' : 'Add lesson'}
+          </button>
+        </form>
+        {loadingLessons ? (
+          <span className="text-muted text-sm">Loading lessons…</span>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Title</th>
+                  <th>Published</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {curriculumLessons.map((L: any) => (
+                  <tr key={L.id}>
+                    <td>{L.position}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--white)' }}>{L.title}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${L.isPublished ? 'btn-success' : 'btn-ghost'}`}
+                        onClick={() => toggleLessonPublished(L.id, L.isPublished)}
+                      >
+                        {L.isPublished ? 'Yes' : 'No'}
+                      </button>
+                    </td>
+                    <td>
+                      <button type="button" className="btn btn-danger btn-sm" onClick={() => removeLesson(L.id)}>
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {curriculumLessons.length === 0 && (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)', padding: '20px 0' }}>
+                      No lessons for this module yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {showNew && (
@@ -1657,14 +2216,26 @@ function SuperAdminDashboardInner() {
   const [loading, setLoading] = useState(true)
   const { data: sidebarSchools } = useData(['sa', 'sidebar-schools'], () => schoolsApi.all(), [])
   const { data: sidebarTutors } = useData(['sa', 'sidebar-tutors'], () => tutorsApi.all(), [])
+  const { data: sidebarReports } = useData(['sa', 'sidebar-reports'], () => reportsApi.all(), [])
+  const { data: sidebarAssessments } = useData(['sa', 'sidebar-assessments'], () => cbtApi.all(), [])
+  const { data: sidebarPaymentsSummary } = useData(['sa', 'sidebar-payments-summary'], () => paymentsApi.summary(), DEFAULT_PAYMENTS_SUMMARY)
 
   const sidebarSchoolArr = Array.isArray(sidebarSchools) ? sidebarSchools : []
   const sidebarTutorArr = Array.isArray(sidebarTutors) ? sidebarTutors : []
+  const sidebarReportArr = Array.isArray(sidebarReports) ? sidebarReports : []
+  const sidebarAssessmentArr = Array.isArray(sidebarAssessments) ? sidebarAssessments : []
   const sidebarPendingApprovals = sidebarSchoolArr.filter((s: any) => s.status === 'PENDING').length
+  const sidebarPendingReports = sidebarReportArr.filter((r: any) => r.status === 'SUBMITTED').length
+  const sidebarPendingVetting = sidebarAssessmentArr.filter((e: any) => e.isVetted !== true).length
+  const ps = { ...DEFAULT_PAYMENTS_SUMMARY, ...(sidebarPaymentsSummary ?? {}) }
+  const sidebarPendingPayments = Math.max(0, (ps.count || 0) - (ps.paidCount || 0))
   const sidebarBadges = {
     schools: sidebarSchoolArr.length,
     approvals: sidebarPendingApprovals,
     tutors: sidebarTutorArr.length,
+    payments: sidebarPendingPayments || null,
+    reports: sidebarPendingReports || null,
+    assessments: sidebarPendingVetting || null,
   }
 
   useEffect(() => {

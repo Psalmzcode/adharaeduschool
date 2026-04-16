@@ -44,16 +44,15 @@ export class PayrollService {
     });
     // Notify tutor by email
     if (payroll.tutor.user.email) {
-      const month = new Date(payroll.year, payroll.month - 1).toLocaleString('en-NG', { month: 'long', year: 'numeric' });
-      await this.emailService.send?.(payroll.tutor.user.email, `Payroll Processed — ${month}`,
-        `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
-          <h2 style="color:#14532d">Payroll Processed ✅</h2>
-          <p>Hello ${payroll.tutor.user.firstName}, your payroll for <strong>${month}</strong> at <strong>${payroll.school.name}</strong> has been processed.</p>
-          <p><strong>Net Amount:</strong> ₦${payroll.netAmount.toLocaleString()}</p>
-          <p><strong>Sessions Taught:</strong> ${payroll.totalSessions}</p>
-          <p style="color:#888;font-size:12px">AdharaEdu Payroll System</p>
-        </div>`
-      );
+      const monthLabel = new Date(payroll.year, payroll.month - 1).toLocaleString('en-NG', { month: 'long', year: 'numeric' });
+      await this.emailService.sendPayrollProcessed({
+        email: payroll.tutor.user.email,
+        firstName: payroll.tutor.user.firstName,
+        monthLabel,
+        schoolName: payroll.school.name,
+        netAmount: payroll.netAmount,
+        totalSessions: payroll.totalSessions,
+      });
     }
     return payroll;
   }

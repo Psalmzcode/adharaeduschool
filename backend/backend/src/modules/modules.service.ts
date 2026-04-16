@@ -1,14 +1,30 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ModuleStackVariant, Track3Stack, TrackLevel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { moduleCurriculumOrderBy, modulesWhereForTrack } from '../common/module-curriculum';
+import { ClassCurriculumService } from '../curriculum/class-curriculum.service';
 
 @Injectable()
 export class ModulesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private classCurriculum: ClassCurriculumService,
+  ) {}
 
-  findAll(track?: string) {
+  findAll(track?: string, track3Stack?: string) {
+    if (!track) {
+      return this.prisma.module.findMany({
+        orderBy: [{ track: 'asc' }, ...moduleCurriculumOrderBy],
+      });
+    }
+    const t = track as TrackLevel;
+    const stack =
+      t === TrackLevel.TRACK_3
+        ? ((track3Stack as Track3Stack) || Track3Stack.PYTHON_FLASK)
+        : null;
     return this.prisma.module.findMany({
-      where: track ? { track: track as any } : undefined,
-      orderBy: [{ track: 'asc' }, { number: 'asc' }],
+      where: modulesWhereForTrack(t, stack),
+      orderBy: moduleCurriculumOrderBy,
     });
   }
 
@@ -36,20 +52,20 @@ export class ModulesService {
       where: { studentId_moduleId: { studentId, moduleId } },
       data: { ...data, completedAt: data.status === 'COMPLETED' ? new Date() : undefined },
     });
-    // No auto-unlock here: module advancement is class-paced via advanceClassModule().
     return updated;
   }
 
   async getClassProgress(schoolId: string, className: string) {
     const students = await this.prisma.student.findMany({
       where: { schoolId, className },
-      select: { id: true, track: true },
+      select: { id: true, track: true, track3Stack: true },
     });
     if (!students.length) {
       return {
         schoolId,
         className,
         track: null,
+        track3Stack: null,
         currentModule: null,
         completedAll: false,
         studentCount: 0,
@@ -57,9 +73,12 @@ export class ModulesService {
     }
 
     const track = students[0].track;
+    const stackForModules =
+      track === TrackLevel.TRACK_3 ? students[0].track3Stack ?? Track3Stack.PYTHON_FLASK : null;
+
     const modules = await this.prisma.module.findMany({
-      where: { track },
-      orderBy: { number: 'asc' },
+      where: modulesWhereForTrack(track, stackForModules),
+      orderBy: moduleCurriculumOrderBy,
     });
     const studentIds = students.map((s) => s.id);
     const progress = await this.prisma.moduleProgress.findMany({
@@ -84,13 +103,23 @@ export class ModulesService {
       }
     }
 
+    const classState = await this.classCurriculum.getState(
+      schoolId,
+      className,
+      track,
+      track === TrackLevel.TRACK_3 ? stackForModules : null,
+    );
+
     return {
       schoolId,
       className,
       track,
+      track3Stack: track === TrackLevel.TRACK_3 ? stackForModules : null,
       currentModule,
       completedAll: !currentModule,
       studentCount: students.length,
+      currentLesson: classState?.currentLesson ?? null,
+      nextLessonId: classState?.currentLessonId ?? null,
     };
   }
 
@@ -132,21 +161,64 @@ export class ModulesService {
     return { updated: sanitized.length };
   }
 
-  async advanceClassModule(
-    schoolId: string,
-    className: string,
-    moduleId: string,
-    passMark = 50,
-  ) {
+  private async resolveNextModule(current: { track: TrackLevel; number: number; stackVariant: ModuleStackVariant }, track3Stack: Track3Stack | null) {
+    if (current.track !== TrackLevel.TRACK_3) {
+      return this.prisma.module.findFirst({
+        where: {
+          track: current.track,
+          number: current.number + 1,
+          stackVariant: ModuleStackVariant.COMMON,
+        },
+      });
+    }
+    const stack = track3Stack ?? Track3Stack.PYTHON_FLASK;
+    const branch =
+      stack === Track3Stack.PYTHON_FLASK ? ModuleStackVariant.PYTHON_FLASK : ModuleStackVariant.REACT_NODE;
+    const n = current.number;
+    const sv = current.stackVariant;
+
+    if (n < 3) {
+      const nextNum = n + 1;
+      if (nextNum === 3) {
+        return this.prisma.module.findFirst({
+          where: { track: TrackLevel.TRACK_3, number: 3, stackVariant: branch },
+        });
+      }
+      return this.prisma.module.findFirst({
+        where: { track: TrackLevel.TRACK_3, number: nextNum, stackVariant: ModuleStackVariant.COMMON },
+      });
+    }
+    if (n === 3 && (sv === ModuleStackVariant.PYTHON_FLASK || sv === ModuleStackVariant.REACT_NODE)) {
+      return this.prisma.module.findFirst({
+        where: { track: TrackLevel.TRACK_3, number: 4, stackVariant: sv },
+      });
+    }
+    if (n === 4 && (sv === ModuleStackVariant.PYTHON_FLASK || sv === ModuleStackVariant.REACT_NODE)) {
+      return this.prisma.module.findFirst({
+        where: { track: TrackLevel.TRACK_3, number: 5, stackVariant: ModuleStackVariant.COMMON },
+      });
+    }
+    if (n === 5) {
+      return this.prisma.module.findFirst({
+        where: { track: TrackLevel.TRACK_3, number: 6, stackVariant: ModuleStackVariant.COMMON },
+      });
+    }
+    return null;
+  }
+
+  async advanceClassModule(schoolId: string, className: string, moduleId: string, passMark = 50) {
     const students = await this.prisma.student.findMany({
       where: { schoolId, className },
-      select: { id: true, track: true },
+      select: { id: true, track: true, track3Stack: true },
     });
     if (!students.length) {
       return { advanced: false, reason: 'No students in class' };
     }
 
     const module = await this.findOne(moduleId);
+    const track3Stack =
+      module.track === TrackLevel.TRACK_3 ? students[0].track3Stack ?? Track3Stack.PYTHON_FLASK : null;
+
     const studentIds = students.map((s) => s.id);
 
     await Promise.all(
@@ -155,8 +227,7 @@ export class ModulesService {
           where: { studentId_moduleId: { studentId, moduleId } },
         });
         const score = row?.score ?? null;
-        const finalStatus =
-          score != null && score >= passMark ? 'COMPLETED' : 'FAILED';
+        const finalStatus = score != null && score >= passMark ? 'COMPLETED' : 'FAILED';
         await this.prisma.moduleProgress.upsert({
           where: { studentId_moduleId: { studentId, moduleId } },
           create: {
@@ -174,9 +245,7 @@ export class ModulesService {
       }),
     );
 
-    const nextModule = await this.prisma.module.findFirst({
-      where: { track: module.track, number: module.number + 1 },
-    });
+    const nextModule = await this.resolveNextModule(module, track3Stack);
 
     if (!nextModule) {
       return { advanced: true, nextModule: null, message: 'Class completed final module' };
@@ -196,10 +265,26 @@ export class ModulesService {
   }
 
   async getStudentProgress(studentId: string) {
-    return this.prisma.moduleProgress.findMany({
+    const student = await this.prisma.student.findUnique({ where: { id: studentId } });
+    if (!student) throw new NotFoundException('Student not found');
+
+    const allowed = await this.prisma.module.findMany({
+      where: modulesWhereForTrack(student.track, student.track3Stack),
+      select: { id: true },
+    });
+    const allowedIds = new Set(allowed.map((m) => m.id));
+
+    const rows = await this.prisma.moduleProgress.findMany({
       where: { studentId },
       include: { module: true },
-      orderBy: { module: { number: 'asc' } },
     });
+
+    return rows
+      .filter((r) => allowedIds.has(r.moduleId))
+      .sort(
+        (a, b) =>
+          a.module.number - b.module.number ||
+          String(a.module.stackVariant).localeCompare(String(b.module.stackVariant)),
+      );
   }
 }

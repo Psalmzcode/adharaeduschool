@@ -113,7 +113,16 @@ export default function TutorOnboardingPage() {
     setErr('')
     try {
       const r = await uploadsApi.tutorKyc(file, entityType)
-      if (r?.url) setter(r.url)
+      if (r?.url) {
+        setter(r.url)
+        // Immediately persist so refresh/logout doesn't lose the upload.
+        await persist({
+          passportPhotoUrl: entityType === 'tutor-kyc-passport' ? r.url : undefined,
+          identificationDocumentUrl: entityType === 'tutor-kyc-id' ? r.url : undefined,
+          signatureUrl: entityType === 'tutor-kyc-signature' ? r.url : undefined,
+        })
+        notify.success('Upload saved')
+      }
     } catch (e: any) {
       setErr(e.message || 'Upload failed')
     }
@@ -137,18 +146,31 @@ export default function TutorOnboardingPage() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--navy)', padding: '24px 16px 48px' }}>
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
-        <div className="flex-between mb-20" style={{ flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h1 className="font-display fw-700 text-white" style={{ fontSize: 22 }}>Complete your tutor profile</h1>
-            <p className="text-muted text-sm mt-4" style={{ maxWidth: 520 }}>
-              Save a draft anytime and sign in later to continue. When everything is filled, submit to access your dashboard.
-            </p>
+      {/* Full-width top bar (like homepage navbar): logo far-left, logout far-right */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
+          <div aria-hidden style={{ lineHeight: 0 }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 50" height="40" width="200">
+              <rect x="1" y="4" width="38" height="40" rx="12" ry="14" fill="#1E7FD4" />
+              <polygon points="20,10 23.5,18.5 33,18.5 25.5,24 28.5,33 20,27.5 11.5,33 14.5,24 7,18.5 16.5,18.5" fill="#F5C518" />
+              <text x="46" y="33" fontFamily="Arial Black, sans-serif" fontWeight="900" fontSize="26" fill="var(--white)">Adhara</text>
+              <text x="153" y="14" fontFamily="Arial, sans-serif" fontWeight="700" fontStyle="italic" fontSize="12" fill="#1E7FD4">Edu</text>
+              <text x="46" y="46" fontFamily="Georgia, serif" fontStyle="italic" fontSize="9.5" fill="var(--muted)" letterSpacing="0.3">Learn Smart. Grow Together</text>
+            </svg>
           </div>
-          <Link href="/auth/login" className="btn btn-ghost btn-sm" onClick={() => localStorage.removeItem('adhara_token')}>
+          <Link
+            href="/auth/login"
+            className="btn btn-ghost btn-sm"
+            style={{ marginLeft: 'auto' }}
+            onClick={() => localStorage.removeItem('adhara_token')}
+          >
             Log out
           </Link>
-        </div>
+      </div>
+      <div style={{ maxWidth: 720, margin: '0 auto' }}>
+        <h1 className="font-display fw-700 text-white" style={{ fontSize: 22, marginBottom: 4 }}>Complete your tutor profile</h1>
+        <p className="text-muted text-sm mb-20" style={{ maxWidth: 520 }}>
+          Save a draft anytime and sign in later to continue. When everything is filled, submit to access your dashboard.
+        </p>
 
         {err && (
           <div className="mb-16" style={{ padding: 12, borderRadius: 8, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#F87171', fontSize: 14 }}>

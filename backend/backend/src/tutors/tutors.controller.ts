@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Patch, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { TutorsService } from './tutors.service';
+import { CreateTutorDto } from './dto/create-tutor.dto';
 import {
   JwtAuthGuard,
   RolesGuard,
@@ -90,7 +91,7 @@ export class TutorsController {
 
   @Post()
   @Roles('SUPER_ADMIN')
-  create(@Body() body: any) {
+  create(@Body() body: CreateTutorDto) {
     return this.tutorsService.create(body);
   }
 
@@ -104,5 +105,17 @@ export class TutorsController {
   @Roles('SUPER_ADMIN')
   assign(@Param('id') id: string, @Body() body: any) {
     return this.tutorsService.assignToSchool(id, body.schoolId, body);
+  }
+
+  @Patch(':id/deactivate')
+  @Roles('SUPER_ADMIN')
+  deactivate(@Param('id') id: string) {
+    return this.tutorsService.deactivate(id);
+  }
+
+  @Patch(':id/verify')
+  @Roles('SUPER_ADMIN')
+  verify(@Param('id') id: string, @Body('isVerified') isVerified: boolean) {
+    return this.tutorsService.setVerified(id, isVerified);
   }
 }

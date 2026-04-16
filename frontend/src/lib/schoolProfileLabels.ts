@@ -10,8 +10,8 @@ export const SCHOOL_TYPE_LABELS: Record<string, string> = {
 
 export const TRACK_LABELS: Record<string, string> = {
   TRACK_1: 'Track 1 — Computer Appreciation (JSS–SS1)',
-  TRACK_2: 'Track 2 — Intro to Programming (SS1–SS2)',
-  TRACK_3: 'Track 3 — Advanced Tech (SS3)',
+  TRACK_2: 'Track 2 — Introduction to Programming (SS1–SS2)',
+  TRACK_3: 'Track 3 — Advanced Tech Skills (SS3)',
 }
 
 export function formatSchoolType(v: string | undefined | null): string {

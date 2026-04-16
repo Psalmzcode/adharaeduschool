@@ -1,31 +1,11 @@
-
 'use client'
 import Link from 'next/link'
-import { useState } from 'react'
+import { MarketingNav } from '@/components/MarketingNav'
 
 export default function ServicesPage() {
   return (
     <div id="page-services" className="page active" style={{display:'block'}}>
-      {/* NAV */}
-      <nav className="nav">
-        <div className="nav-logo">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 50" height="44" width="220">
-            <rect x="1" y="4" width="38" height="40" rx="12" ry="14" fill="#1E7FD4"/>
-            <polygon points="20,10 23.5,18.5 33,18.5 25.5,24 28.5,33 20,27.5 11.5,33 14.5,24 7,18.5 16.5,18.5" fill="#F5C518"/>
-            <text x="46" y="33" fontFamily="Arial Black,sans-serif" fontWeight="900" fontSize="26" fill="var(--white)">Adhara</text>
-            <text x="153" y="14" fontFamily="Arial,sans-serif" fontWeight="700" fontStyle="italic" fontSize="12" fill="#1E7FD4">Edu</text>
-          </svg>
-        </div>
-        <ul className="nav-links">
-          <li><Link href="/">Home</Link></li>
-          <li><Link href="/services" style={{color:'var(--gold)'}}>Services</Link></li>
-          <li><a href="/#how-it-works">How It Works</a></li>
-        </ul>
-        <div className="nav-actions">
-          <Link href="/auth/login" className="btn btn-outline btn-sm">Sign In</Link>
-          <Link href="/auth/register" className="btn btn-primary btn-sm">Get Started →</Link>
-        </div>
-      </nav>
+      <MarketingNav />
 
       {/* Hero */}
       <div style={{padding:'160px 60px 80px',background:'var(--navy2)',borderBottom:'1px solid var(--border)',position:'relative',overflow:'hidden'}}>

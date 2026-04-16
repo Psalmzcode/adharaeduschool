@@ -12,6 +12,8 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { RequestOtpDto } from './dto/request-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { AllowIncompleteTutorProfile, JwtAuthGuard, TutorOnboardingGuard } from './guards/jwt-auth.guard';
 
 @ApiTags('Auth')
@@ -29,6 +31,24 @@ export class AuthController {
   @ApiOperation({ summary: 'Login — returns JWT + user profile' })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post('otp/send')
+  @ApiOperation({
+    summary: 'Request a 6-digit sign-in code by email',
+    description:
+      'Sends an OTP to the address if a matching active account exists. Response is always the same to avoid email enumeration.',
+  })
+  requestOtp(@Body() dto: RequestOtpDto) {
+    return this.authService.requestOtp(dto);
+  }
+
+  @Post('otp/verify')
+  @ApiOperation({
+    summary: 'Verify email code — returns JWT + user (same shape as login)',
+  })
+  verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto);
   }
 
   @Get('me')

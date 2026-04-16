@@ -2,6 +2,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { HomeServicesCarousel } from '@/components/HomeServicesCarousel'
+import { MarketingNav } from '@/components/MarketingNav'
 
 const HERO_IMAGES = [
   'https://images.unsplash.com/photo-1531482615713-2afd69097998?w=600&q=80',
@@ -11,17 +13,7 @@ const HERO_IMAGES = [
 ]
 
 export default function HomePage() {
-  const [theme, setTheme] = useState<'dark'|'light'>('dark')
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [heroImageIndex, setHeroImageIndex] = useState(0)
-
-  useEffect(() => {
-    const saved = localStorage.getItem('adharaTheme')
-    if (saved === 'light') {
-      setTheme('light')
-      document.body.classList.add('light-mode')
-    }
-  }, [])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -30,74 +22,10 @@ export default function HomePage() {
     return () => window.clearInterval(timer)
   }, [])
 
-  const toggleTheme = () => {
-    if (theme === 'dark') {
-      setTheme('light')
-      document.body.classList.add('light-mode')
-      localStorage.setItem('adharaTheme', 'light')
-    } else {
-      setTheme('dark')
-      document.body.classList.remove('light-mode')
-      localStorage.setItem('adharaTheme', 'dark')
-    }
-  }
-
   return (
     <div id="page-home" className="page active" style={{display:'block'}}>
 
-      {/* ── NAV ── */}
-      <nav className="nav">
-        <div className="nav-logo">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 50" height="44" width="220" aria-label="AdharaEdu">
-            <rect x="1" y="4" width="38" height="40" rx="12" ry="14" fill="#1E7FD4"/>
-            <polygon points="20,10 23.5,18.5 33,18.5 25.5,24 28.5,33 20,27.5 11.5,33 14.5,24 7,18.5 16.5,18.5" fill="#F5C518"/>
-            <text x="46" y="33" fontFamily="Arial Black, sans-serif" fontWeight="900" fontSize="26" fill="var(--white)">Adhara</text>
-            <text x="153" y="14" fontFamily="Arial, sans-serif" fontWeight="700" fontStyle="italic" fontSize="12" fill="#1E7FD4">Edu</text>
-            <text x="46" y="46" fontFamily="Georgia, serif" fontStyle="italic" fontSize="9.5" fill="var(--muted)" letterSpacing="0.3">Learn Smart. Grow Together</text>
-          </svg>
-        </div>
-        <ul className="nav-links">
-          <li><a onClick={() => window.scrollTo(0,0)} style={{cursor:'pointer'}}>Home</a></li>
-          <li><Link href="/services">Services</Link></li>
-          <li><a href="#how-it-works">How It Works</a></li>
-          <li><a href="#about">About</a></li>
-          <li><a href="#contact">Contact</a></li>
-        </ul>
-        <div className="nav-actions">
-          <button id="theme-toggle-btn" onClick={toggleTheme} className="btn btn-ghost btn-sm" style={{fontSize:18,padding:'10px 14px'}}>{theme === 'dark' ? '☀️' : '🌙'}</button>
-          <Link href="/auth/login" className="btn btn-outline btn-sm">Sign In</Link>
-          <Link href="/auth/register" className="btn btn-primary btn-sm">Get Started →</Link>
-        </div>
-        {/* Hamburger */}
-        <button className={`hamburger${mobileMenuOpen?' open':''}`} id="hamburger-home" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} aria-label="Menu">
-          <span></span><span></span><span></span>
-        </button>
-      </nav>
-
-      {/* Mobile Menu */}
-      <div className={`mobile-menu${mobileMenuOpen?' open':''}`} id="mobile-menu-home" style={{display: mobileMenuOpen ? 'flex' : 'none'}}>
-        <div className="mobile-menu-header">
-          <div className="nav-logo" style={{cursor:'pointer'}} onClick={() => setMobileMenuOpen(false)}>
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 50" height="36" width="180" aria-label="AdharaEdu">
-              <rect x="1" y="4" width="38" height="40" rx="12" ry="14" fill="#1E7FD4"/>
-              <polygon points="20,10 23.5,18.5 33,18.5 25.5,24 28.5,33 20,27.5 11.5,33 14.5,24 7,18.5 16.5,18.5" fill="#F5C518"/>
-              <text x="46" y="33" fontFamily="Arial Black, sans-serif" fontWeight="900" fontSize="26" fill="var(--white)">Adhara</text>
-              <text x="153" y="14" fontFamily="Arial, sans-serif" fontWeight="700" fontStyle="italic" fontSize="12" fill="#1E7FD4">Edu</text>
-            </svg>
-          </div>
-          <button className="mobile-menu-close" onClick={() => setMobileMenuOpen(false)}>✕</button>
-        </div>
-        <div className="mobile-menu-links">
-          <div className="mobile-menu-link" onClick={() => setMobileMenuOpen(false)}>Home <span className="link-arrow">→</span></div>
-          <Link href="/services" className="mobile-menu-link" onClick={() => setMobileMenuOpen(false)}>All Services <span className="link-arrow">→</span></Link>
-          <div className="mobile-menu-link">For Schools <span className="link-arrow">→</span></div>
-          <div className="mobile-menu-link">About <span className="link-arrow">→</span></div>
-        </div>
-        <div className="mobile-menu-actions">
-          <Link href="/auth/register" className="btn btn-primary btn-lg" onClick={() => setMobileMenuOpen(false)}>Get Started →</Link>
-          <Link href="/auth/login" className="btn btn-outline btn-lg" onClick={() => setMobileMenuOpen(false)}>Sign In</Link>
-        </div>
-      </div>
+      <MarketingNav />
 
       {/* ── HERO ── */}
       <section className="hero">
@@ -324,32 +252,16 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── SERVICES PREVIEW ── */}
-      <section>
-        <div style={{textAlign:'center',marginBottom:60}}>
+      {/* ── SERVICES PREVIEW (responsive carousel) ── */}
+      <section id="services-preview" aria-label="Our services">
+        <div style={{ textAlign: 'center', marginBottom: 40 }}>
           <div className="section-eyebrow">Our Services</div>
           <h2 className="section-title">Everything a School Needs</h2>
-          <p className="section-desc" style={{margin:'0 auto',maxWidth:500}}>Nine services built around the real challenges Nigerian schools face every day.</p>
+          <p className="section-desc" style={{ margin: '0 auto', maxWidth: 500 }}>
+            Nine services built around the real challenges Nigerian schools face every day.
+          </p>
         </div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20,maxWidth:1000,margin:'0 auto'}}>
-          {[
-            {icon:'💻',title:'Tech Skills Education',desc:'Track-based curriculum taught by expert tutors in your school.'},
-            {icon:'👩‍🏫',title:'Staff Training',desc:'Professional development for teachers on pedagogy and technology.'},
-            {icon:'🏆',title:'Student Competitions',desc:'Inter-school coding challenges with prizes and certificates.'},
-            {icon:'🌐',title:'School Website',desc:'Professional website, email, and digital presence for your school.'},
-            {icon:'💰',title:'Grants & Funding',desc:'We help schools apply for government and NGO grants.'},
-            {icon:'🎯',title:'Student Coaching',desc:'One-on-one academic coaching for students who need more support.'},
-          ].map(({icon,title,desc}) => (
-            <div key={title} className="card" style={{textAlign:'left'}}>
-              <div style={{fontSize:32,marginBottom:16}}>{icon}</div>
-              <h3 style={{fontFamily:'var(--font-display)',fontSize:18,fontWeight:700,marginBottom:12,color:'var(--white)'}}>{title}</h3>
-              <p style={{fontSize:14,lineHeight:1.7}}>{desc}</p>
-            </div>
-          ))}
-        </div>
-        <div style={{textAlign:'center',marginTop:48}}>
-          <Link href="/services" className="btn btn-primary btn-lg">View All 9 Services →</Link>
-        </div>
+        <HomeServicesCarousel />
       </section>
 
       {/* ── CTA ── */}
@@ -384,11 +296,33 @@ export default function HomePage() {
           {[
             {title:'Services',links:['Tech Skills','Staff Training','Student Coaching','School Websites','Competitions','Grants & Funding']},
             {title:'Platform',links:['School Admin','Student Portal','Tutor Dashboard','Parent Portal','CBT Exams','Super Admin']},
-            {title:'Company',links:['About Us','Our Mission','Contact Us','Privacy Policy','Terms of Service','Blog']},
+            {title:'Company',links:[
+              { label: 'About Us', href: '/about' },
+              { label: 'Our Mission', href: '/about#mission' },
+              { label: 'Contact Us', href: '/contact' },
+              { label: 'Privacy Policy', href: '#' },
+              { label: 'Terms of Service', href: '#' },
+              { label: 'Blog', href: '#' },
+            ]},
           ].map(({title,links}) => (
             <div key={title} className="footer-col">
               <h5>{title}</h5>
-              <ul>{links.map(l=><li key={l}><a href="#">{l}</a></li>)}</ul>
+              <ul>
+                {links.map((l) => {
+                  if (typeof l === 'string') {
+                    return (
+                      <li key={l}>
+                        <a href="#">{l}</a>
+                      </li>
+                    )
+                  }
+                  return (
+                    <li key={l.label}>
+                      <Link href={l.href}>{l.label}</Link>
+                    </li>
+                  )
+                })}
+              </ul>
             </div>
           ))}
         </div>

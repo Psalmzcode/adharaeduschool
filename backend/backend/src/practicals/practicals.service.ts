@@ -34,8 +34,37 @@ export class PracticalsService {
         },
       });
 
-    if (targets.length <= 1) return createOne(targets[0]);
-    return this.prisma.$transaction(targets.map((className) => createOne(className)));
+    const notifyForClass = async (className: string, task: { id: string; title: string; dueDate: Date | null }) => {
+      const students = await this.prisma.student.findMany({
+        where: { schoolId: String(data.schoolId), className },
+        select: { userId: true },
+      });
+      const due =
+        task.dueDate != null
+          ? ` Due: ${new Date(task.dueDate).toLocaleDateString('en-NG')}`
+          : '';
+      const rows = students.map((s) => ({
+        userId: s.userId,
+        title: `New Practical: ${task.title}`,
+        message: `A new practical has been posted for ${className}.${due}`,
+        link: '/dashboard/student?section=student-practicals',
+      }));
+      if (rows.length) {
+        await this.prisma.notification.createMany({ data: rows }).catch(() => {});
+      }
+    };
+
+    if (targets.length <= 1) {
+      const t = await createOne(targets[0]);
+      if (t?.isPublished) await notifyForClass(t.className, t).catch(() => {});
+      return t;
+    }
+
+    const tasks = await this.prisma.$transaction(targets.map((className) => createOne(className)));
+    await Promise.all(
+      tasks.map((t: any) => (t?.isPublished ? notifyForClass(t.className, t) : Promise.resolve())),
+    ).catch(() => {});
+    return tasks;
   }
 
   async listTasks(query: { tutorId?: string; schoolId?: string; className?: string; moduleId?: string }) {
@@ -78,7 +107,7 @@ export class PracticalsService {
   async submit(taskId: string, studentUserId: string, data: { evidenceUrl?: string; evidenceText?: string }) {
     const student = await this.prisma.student.findUnique({
       where: { userId: studentUserId },
-      select: { id: true, schoolId: true, className: true },
+      select: { id: true, schoolId: true, className: true, termLabel: true },
     });
     if (!student) throw new NotFoundException('Student profile not found');
 
@@ -94,11 +123,13 @@ export class PracticalsService {
       create: {
         taskId,
         studentId: student.id,
+        termLabel: student.termLabel || null,
         evidenceUrl: data.evidenceUrl,
         evidenceText: data.evidenceText,
         status: isLate ? 'LATE' : 'SUBMITTED',
       },
       update: {
+        termLabel: student.termLabel || null,
         evidenceUrl: data.evidenceUrl,
         evidenceText: data.evidenceText,
         status: isLate ? 'LATE' : 'SUBMITTED',

@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { TrackLevel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { modulesWhereForTrack } from '../common/module-curriculum';
 import { EmailService } from '../email/email.service';
 import { ConfigService } from '@nestjs/config';
 import * as QRCode from 'qrcode';
@@ -19,6 +21,12 @@ export class CertificatesService {
 
   // Check if a student qualifies for a certificate
   async checkEligibility(studentId: string) {
+    const student = await this.prisma.student.findUnique({
+      where: { id: studentId },
+      select: { track: true, track3Stack: true },
+    });
+    if (!student) return { eligible: false, reason: 'Student not found' };
+
     const progress = await this.prisma.moduleProgress.findMany({
       where: { studentId },
       include: { module: true },
@@ -33,11 +41,17 @@ export class CertificatesService {
     }
 
     const eligible: string[] = [];
-    for (const [track, modules] of Object.entries(trackGroups)) {
-      const completed = modules.filter(m => m.status === 'COMPLETED');
-      const scores = completed.map(m => m.score || 0);
+    for (const [track, mods] of Object.entries(trackGroups)) {
+      const expected = await this.prisma.module.findMany({
+        where: modulesWhereForTrack(track as TrackLevel, student.track3Stack),
+        select: { id: true },
+      });
+      const expectedIds = new Set(expected.map((m) => m.id));
+      const inTrack = mods.filter((p) => expectedIds.has(p.moduleId));
+      const completed = inTrack.filter((m) => m.status === 'COMPLETED');
+      const scores = completed.map((m) => m.score || 0);
       const avg = scores.length ? scores.reduce((a, b) => a + b) / scores.length : 0;
-      if (completed.length === modules.length && avg >= 50) {
+      if (completed.length === expected.length && expected.length > 0 && avg >= 50) {
         eligible.push(track);
       }
     }
@@ -117,22 +131,16 @@ export class CertificatesService {
       data: { studentId, track, serialNumber, pdfUrl, qrCode: qrDataUrl, averageScore: avg },
     });
 
-    // Send congratulations email
     if (student.user.email) {
-      await this.emailService.send?.(student.user.email, `🎓 Your AdharaEdu Certificate is Ready — ${trackName}`,
-        `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:20px">
-          <div style="background:linear-gradient(135deg,#050D1A,#0d1e35);padding:32px;text-align:center;border-radius:12px 12px 0 0">
-            <div style="font-size:48px;margin-bottom:8px">🎓</div>
-            <h1 style="color:#D4A853;font-size:24px;margin:0">Certificate Earned!</h1>
-          </div>
-          <div style="background:#fff;padding:32px;border-radius:0 0 12px 12px;border:1px solid #e5e7eb">
-            <h2 style="color:#050D1A">Congratulations, ${student.user.firstName}!</h2>
-            <p style="color:#555;line-height:1.7">You have successfully completed <strong>${trackName}</strong> with an average score of <strong>${avg}%</strong>.</p>
-            <p style="color:#555">Your certificate serial number: <strong style="font-family:monospace">${serialNumber}</strong></p>
-            ${pdfUrl ? `<a href="${pdfUrl}" style="display:inline-block;background:#1E7FD4;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:8px">⬇ Download Certificate PDF</a>` : ''}
-          </div>
-        </div>`
-      );
+      await this.emailService.sendCertificateReady({
+        email: student.user.email,
+        firstName: student.user.firstName,
+        trackName,
+        averageScore: avg,
+        serialNumber,
+        pdfUrl: pdfUrl || null,
+        studentPortalUrl: `${frontendUrl}/dashboard/student`,
+      });
     }
 
     return { ...cert, pdfBytes: pdfUrl ? undefined : pdfBytes.toString('base64') };

@@ -3,58 +3,47 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { authApi, tutorsApi } from '@/lib/api'
-
-const DEMO = [
-  {role:'SUPER_ADMIN',  icon:'⚡', label:'Super Admin',   email:'admin@adharaedu.com',        pw:'SuperAdmin@123', dest:'/dashboard/superadmin'},
-  {role:'SCHOOL_ADMIN', icon:'🏫', label:'School Admin',  email:'admin@crownheights.edu.ng',  pw:'SchoolAdmin@123', dest:'/dashboard/admin'},
-  {role:'TUTOR',        icon:'👩‍🏫', label:'Tutor',          email:'tutor@adharaedu.com',         pw:'Tutor@123',       dest:'/dashboard/tutor'},
-  {role:'STUDENT',      icon:'👤', label:'Student',        email:'aisha@crownheights.edu.ng',  pw:'Student@123',     dest:'/dashboard/student'},
-  {role:'PARENT',       icon:'👪', label:'Parent',         email:'funke.okonkwo@gmail.com',     pw:'Parent@123',      dest:'/dashboard/student'},
-]
+import { notify } from '@/lib/notify'
 
 export default function LoginPage() {
   const router = useRouter()
-  const [email, setEmail] = useState('')
+  const [loginId, setLoginId] = useState('')
   const [password, setPassword] = useState('')
-  const [selectedRole, setSelectedRole] = useState('SUPER_ADMIN')
   const [remember, setRemember] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [showPw, setShowPw] = useState(false)
 
   const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault(); setError(''); setLoading(true)
+    e.preventDefault()
+    setError('')
+    setLoading(true)
     try {
-      const data = await authApi.login(email, password)
+      const data = await authApi.login(loginId, password)
       localStorage.setItem('adhara_token', data.token)
+      if (data.user) localStorage.setItem('adhara_user', JSON.stringify(data.user))
       const dest: Record<string,string> = {SUPER_ADMIN:'/dashboard/superadmin',SCHOOL_ADMIN:'/dashboard/admin',TUTOR:'/dashboard/tutor',STUDENT:'/dashboard/student',PARENT:'/dashboard/student'}
       if (data.user?.role === 'TUTOR') {
         try {
           const profile = await tutorsApi.me()
           if (profile?.onboardingStatus === 'DRAFT') {
+            notify.success('Signed in successfully')
             router.push('/dashboard/tutor/onboarding')
-            setLoading(false)
             return
           }
         } catch {
           /* continue to dashboard */
         }
       }
+      notify.success('Signed in successfully')
       router.push(dest[data.user?.role] || '/dashboard/admin')
     } catch (err: any) {
-      // Demo fallback
-      const demo = DEMO.find(u => u.email === email && u.pw === password)
-      if (demo) {
-        localStorage.setItem('adhara_token', 'demo-token')
-        localStorage.setItem('adhara_user', JSON.stringify({email:demo.email,role:demo.role,firstName:demo.label.split(' ')[0],lastName:demo.label.split(' ')[1]||''}))
-        router.push(demo.dest); return
-      }
-      setError(err.message || 'Invalid credentials')
+      notify.fromError(err, 'Invalid credentials')
+      setError(err?.message || 'Invalid credentials')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
-
-  const fill = (u: typeof DEMO[0]) => { setEmail(u.email); setPassword(u.pw); setSelectedRole(u.role); setError('') }
 
   return (
     <div id="page-login" className="auth-page active">
@@ -98,9 +87,9 @@ export default function LoginPage() {
           {error && <div style={{background:'rgba(239,68,68,0.12)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,padding:'12px 16px',marginBottom:16,fontSize:14,color:'#F87171'}}>⚠️ {error}</div>}
           <form className="auth-form" onSubmit={handleLogin}>
             <div className="form-group form-input-icon">
-              <label>Email Address</label>
+              <label>Email or username</label>
               <span className="icon">✉️</span>
-              <input type="email" className="form-input" placeholder="you@school.edu.ng" value={email} onChange={e=>setEmail(e.target.value)} required />
+              <input type="text" className="form-input" placeholder="you@school.edu.ng or chr.aisha" value={loginId} onChange={e=>setLoginId(e.target.value)} required autoComplete="username" />
             </div>
             <div className="form-group form-input-icon" style={{position:'relative'}}>
               <label>Password</label>
@@ -114,19 +103,6 @@ export default function LoginPage() {
               </label>
               <a className="auth-link" style={{fontSize:13,cursor:'pointer'}}>Forgot password?</a>
             </div>
-            <div>
-              <div style={{fontSize:13,color:'var(--muted)',marginBottom:12}}>Sign in as:</div>
-              <div className="role-select-grid" style={{gridTemplateColumns:'1fr 1fr 1fr'}}>
-                {DEMO.map(u=>(
-                  <div key={u.role} className={`role-btn${selectedRole===u.role?' selected':''}`}
-                    onClick={()=>fill(u)}
-                    style={selectedRole===u.role?{borderColor:'var(--gold)',background:'rgba(212,168,83,0.1)'}:{}}>
-                    <span className="role-icon">{u.icon}</span>
-                    <span className="role-name">{u.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
             <button type="submit" className="btn btn-primary" style={{width:'100%',justifyContent:'center'}} disabled={loading}>
               {loading?'Signing in…':'Sign In to Dashboard →'}
             </button>
@@ -137,18 +113,13 @@ export default function LoginPage() {
             Don&apos;t have an account? <a className="auth-link" onClick={()=>router.push('/auth/register')} style={{cursor:'pointer'}}>Register your school</a>
           </p>
           <p className="auth-footer-text" style={{marginTop:12}}>
+            <a className="auth-link" onClick={()=>router.push('/auth/login-otp')} style={{cursor:'pointer'}}>Sign in with email code →</a>
+          </p>
+          <p className="auth-footer-text" style={{marginTop:12}}>
             <a className="auth-link" onClick={()=>router.push('/')} style={{cursor:'pointer'}}>← Back to website</a>
             &nbsp;&nbsp;|&nbsp;&nbsp;
             <a className="auth-link" onClick={()=>router.push('/cbt')} style={{cursor:'pointer'}}>📝 CBT Exam Login</a>
           </p>
-          <div style={{marginTop:24,padding:'14px 18px',background:'var(--muted3)',border:'1px solid var(--border2)',borderRadius:12}}>
-            <div style={{fontSize:11,color:'var(--muted)',marginBottom:10,fontFamily:'var(--font-display)',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em'}}>Click to fill demo credentials</div>
-            {DEMO.map(u=>(
-              <div key={u.role} onClick={()=>fill(u)} style={{fontSize:13,color:'var(--muted)',marginBottom:5,cursor:'pointer',padding:'3px 6px',borderRadius:5}}>
-                <span style={{color:'var(--gold2)',fontWeight:600}}>{u.icon} {u.label}:</span> {u.email}
-              </div>
-            ))}
-          </div>
         </div>
       </div>
     </div>

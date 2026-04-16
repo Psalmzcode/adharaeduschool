@@ -34,13 +34,39 @@ function ProgressBar({value,color='linear-gradient(90deg,var(--gold),var(--teal)
 function Modal({open,onClose,title,children}:{open:boolean,onClose:()=>void,title:string,children:React.ReactNode}) {
   if (!open) return null
   return (
-    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',backdropFilter:'blur(4px)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:24}}>
-      <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:560,background:'var(--navy2)',border:'1px solid var(--border)',borderRadius:24,overflow:'hidden'}}>
-        <div style={{padding:'20px 24px',borderBottom:'1px solid var(--border2)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+    <div
+      onClick={onClose}
+      style={{
+        position:'fixed',
+        inset:0,
+        background:'rgba(0,0,0,0.7)',
+        backdropFilter:'blur(4px)',
+        zIndex:1000,
+        display:'flex',
+        alignItems:'center',
+        justifyContent:'center',
+        padding:16
+      }}
+    >
+      <div
+        onClick={e=>e.stopPropagation()}
+        style={{
+          width:'100%',
+          maxWidth:720,
+          maxHeight:'90vh',
+          background:'var(--navy2)',
+          border:'1px solid var(--border)',
+          borderRadius:18,
+          overflow:'hidden',
+          display:'flex',
+          flexDirection:'column'
+        }}
+      >
+        <div style={{padding:'16px 18px',borderBottom:'1px solid var(--border2)',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
           <h3 style={{fontFamily:'var(--font-display)',fontSize:18,fontWeight:700,color:'var(--white)'}}>{title}</h3>
           <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:'var(--muted)',fontSize:20}}>✕</button>
         </div>
-        <div style={{padding:24}}>{children}</div>
+        <div style={{padding:16,overflow:'auto'}}>{children}</div>
       </div>
     </div>
   )
@@ -235,14 +261,24 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
   const DEFAULT_CLASSES = ['JSS1A','JSS1B','JSS2A','SS1A','SS1B','SS2A','SS2B','SS3A','SS3B']
   const [students, setStudents] = useState<any[]>([])
   const [search, setSearch] = useState('')
+  const [termFilter, setTermFilter] = useState<string>('ALL')
   const [loading, setLoading] = useState(true)
   const [loadingPracticals, setLoadingPracticals] = useState(false)
   const [practicalAvgByStudentId, setPracticalAvgByStudentId] = useState<Record<string, number>>({})
   const [showAdd, setShowAdd] = useState(false)
+  const [tempPwByStudentId, setTempPwByStudentId] = useState<Record<string, string>>({})
+  const [revealPwByStudentId, setRevealPwByStudentId] = useState<Record<string, boolean>>({})
+  const [resettingPwByStudentId, setResettingPwByStudentId] = useState<Record<string, boolean>>({})
   const [manualClassTrackMap, setManualClassTrackMap] = useState<Record<string, string>>({})
   const [form, setForm] = useState({firstName:'',lastName:'',email:'',className:'SS3A',track:'TRACK_1'})
+  const resolvedTermLabel = (() => {
+    const y = String(school?.academicYearLabel || '').trim()
+    const t = String(school?.currentTermLabel || '').trim()
+    const joined = [y, t].filter(Boolean).join(' ').trim()
+    return joined || '2025/2026 Term 2'
+  })()
 
-  useEffect(()=>{ if(school?.id) loadStudents() },[school, search])
+  useEffect(()=>{ if(school?.id) loadStudents() },[school, search, termFilter])
   useEffect(() => {
     if (!school?.id) {
       setManualClassTrackMap({})
@@ -264,13 +300,42 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
   }, [school?.id])
   const loadStudents = async () => {
     setLoading(true)
-    try { const d = await studentsApi.all({schoolId:school?.id,search}); setStudents(d||[]) } catch{ setStudents([]) }
+    try {
+      const params: any = { schoolId: school?.id, search }
+      if (termFilter && termFilter !== 'ALL') params.termLabel = termFilter
+      const d = await studentsApi.all(params)
+      setStudents(d || [])
+    } catch {
+      setStudents([])
+    }
     setLoading(false)
   }
   const addStudent = async (e:React.FormEvent) => {
     e.preventDefault()
     const resolvedTrack = classTrackMap[form.className] || form.track
-    try { await studentsApi.create({...form,track:resolvedTrack,schoolId:school?.id,termLabel:'2025/2026 Term 2'}); setShowAdd(false); loadStudents() } catch{}
+    try {
+      await studentsApi.create({ ...form, track: resolvedTrack, schoolId: school?.id, termLabel: resolvedTermLabel })
+      notify.success('Student created')
+      setShowAdd(false)
+      loadStudents()
+    } catch (e: any) {
+      notify.fromError(e, 'Could not create student')
+    }
+  }
+
+  const resetPassword = async (studentId: string) => {
+    setResettingPwByStudentId((prev) => ({ ...prev, [studentId]: true }))
+    try {
+      const res = await studentsApi.resetPassword(studentId)
+      const pw = String(res?.tempPassword || '')
+      if (!pw) throw new Error('No temporary password returned')
+      setTempPwByStudentId((prev) => ({ ...prev, [studentId]: pw }))
+      setRevealPwByStudentId((prev) => ({ ...prev, [studentId]: true }))
+      notify.success('Temporary password generated')
+    } catch (e: any) {
+      notify.fromError(e, 'Could not reset password')
+    }
+    setResettingPwByStudentId((prev) => ({ ...prev, [studentId]: false }))
   }
 
   const list = students
@@ -289,6 +354,13 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
   const classTrackMap = { ...manualClassTrackMap, ...resolvedObservedMap }
   const classOptions = Array.from(new Set([...DEFAULT_CLASSES, ...Object.keys(classTrackMap)])).sort()
   const filteredList = selectedClass ? list.filter((s:any)=>s.className===selectedClass) : list
+  const termOptions = Array.from(
+    new Set(
+      (Array.isArray(students) ? students : [])
+        .map((s: any) => String(s?.termLabel || '').trim())
+        .filter(Boolean),
+    ),
+  ).sort()
   useEffect(() => {
     const derivedTrack = classTrackMap[form.className]
     if (derivedTrack && derivedTrack !== form.track) {
@@ -312,8 +384,12 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
         }
         const submissionsByTask = await Promise.all(taskArr.map((t: any) => practicalsApi.submissions(t.id).catch(() => [])))
         const submissions = submissionsByTask.flat()
+        const filteredSubs =
+          termFilter && termFilter !== 'ALL'
+            ? submissions.filter((s: any) => String(s?.termLabel || '').trim() === termFilter)
+            : submissions
         const scoreMap: Record<string, number[]> = {}
-        submissions.forEach((sub: any) => {
+        filteredSubs.forEach((sub: any) => {
           if (!sub?.studentId || typeof sub?.totalScore !== 'number') return
           if (!scoreMap[sub.studentId]) scoreMap[sub.studentId] = []
           scoreMap[sub.studentId].push(sub.totalScore)
@@ -330,7 +406,7 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
       setLoadingPracticals(false)
     }
     loadPracticalScores()
-  }, [school?.id, selectedClass])
+  }, [school?.id, selectedClass, termFilter])
   useEffect(() => {
     if (!trackOptions.length) return
     if (!trackOptions.some((t) => t.code === form.track)) {
@@ -443,6 +519,16 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
           </div>
           <div style={{display:'flex',gap:12,alignItems:'center'}}>
             <input className="form-input" placeholder="Search students…" value={search} onChange={e=>setSearch(e.target.value)} style={{width:240,padding:'10px 16px'}}/>
+            <select
+              className="form-input"
+              value={termFilter}
+              onChange={(e) => setTermFilter(e.target.value)}
+              style={{ appearance: 'none', width: 220, padding: '10px 16px' }}
+              title="Filter by term (billing)"
+            >
+              <option value="ALL">All terms</option>
+              {termOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
             {selectedClass && <button onClick={onBackToClasses} className="btn btn-ghost btn-sm">Back to Classes</button>}
             {selectedClass && <button onClick={onClearClass} className="btn btn-ghost btn-sm">Clear Class Filter</button>}
             <button onClick={()=>setShowAdd(true)} className="btn btn-primary btn-sm">+ Add Student</button>
@@ -458,13 +544,13 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
           </div>
         )}
         <table className="data-table">
-          <thead><tr><th>Student</th><th>Reg Number</th><th>Class</th><th>Track</th><th>Module Avg</th><th>Assignment Avg</th><th>CBT Avg</th><th>Practical Avg</th><th>Track Score</th><th>Status</th></tr></thead>
+          <thead><tr><th>Student</th><th>Reg Number</th><th>Class</th><th>Track</th><th>Module Avg</th><th>Assignment Avg</th><th>CBT Avg</th><th>Practical Avg</th><th>Track Score</th><th>Password</th><th>Status</th></tr></thead>
           <tbody>
             {!loading && filteredList.length===0 && (
-              <tr><td colSpan={10} style={{textAlign:'center',padding:'24px 0',color:'var(--muted)'}}>No students found</td></tr>
+              <tr><td colSpan={11} style={{textAlign:'center',padding:'24px 0',color:'var(--muted)'}}>No students found</td></tr>
             )}
             {loading && (
-              <tr><td colSpan={10} style={{textAlign:'center',padding:'24px 0',color:'var(--muted)'}}>Loading students…</td></tr>
+              <tr><td colSpan={11} style={{textAlign:'center',padding:'24px 0',color:'var(--muted)'}}>Loading students…</td></tr>
             )}
             {!loading && filteredList.map((s:any,i:number)=>{
               const scores = (s.moduleProgress||[]).map((p:any)=>p.score).filter(Boolean)
@@ -480,6 +566,9 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
               if (practicalAvg != null) parts.push({ score: practicalAvg, weight: 40 })
               const totalWeight = parts.reduce((sum, p) => sum + p.weight, 0)
               const trackScore = totalWeight ? Math.round(parts.reduce((sum, p) => sum + (p.score * p.weight), 0) / totalWeight) : null
+              const pw = tempPwByStudentId[s.id]
+              const revealing = !!revealPwByStudentId[s.id]
+              const resetting = !!resettingPwByStudentId[s.id]
               return (
                 <tr key={i}>
                   <td><div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -496,6 +585,43 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
                   <td><strong style={{color:cbtAvg!=null?(cbtAvg>=70?'var(--success)':'var(--warning)'):'var(--muted)'}}>{cbtAvg!=null?`${cbtAvg}%`:'—'}</strong></td>
                   <td><strong style={{color:practicalAvg!=null?(practicalAvg>=70?'var(--success)':'var(--warning)'):'var(--muted)'}}>{practicalAvg!=null?`${practicalAvg}%`:'—'}</strong></td>
                   <td><strong style={{color:trackScore!=null?(trackScore>=70?'var(--success)':'var(--warning)'):'var(--muted)'}}>{trackScore!=null?`${trackScore}%`:'—'}</strong></td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                    {pw ? (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span>{revealing ? pw : '••••••••'}</span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10, padding: '6px 10px' }}
+                          onClick={() => setRevealPwByStudentId((prev) => ({ ...prev, [s.id]: !prev[s.id] }))}
+                        >
+                          {revealing ? 'Hide' : 'Reveal'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10, padding: '6px 10px' }}
+                          onClick={() =>
+                            navigator.clipboard?.writeText(pw)
+                              .then(() => notify.success('Password copied'))
+                              .catch(() => notify.warning('Could not copy'))
+                          }
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 10, padding: '6px 10px' }}
+                        disabled={resetting}
+                        onClick={() => resetPassword(s.id)}
+                      >
+                        {resetting ? 'Generating…' : 'Generate'}
+                      </button>
+                    )}
+                  </td>
                   <td><span className={`badge ${avg>0&&avg<50?'badge-danger':'badge-success'}`}>{avg>0&&avg<50?'At Risk':'Active'}</span></td>
                 </tr>
               )
@@ -923,14 +1049,31 @@ function AnnouncementsSection({school}:{school:any}) {
 
   const postNotice = async (e:React.FormEvent) => {
     e.preventDefault()
-    try { await noticesApi.create({...form,schoolId:school?.id}); setShowAdd(false); if(school?.id) noticesApi.all(school.id).then((d:any)=>setNotices(d||[])) } catch{}
+    try {
+      await noticesApi.create({ ...form, schoolId: school?.id })
+      notify.success('Announcement posted')
+      setShowAdd(false)
+      if (school?.id) noticesApi.all(school.id).then((d: any) => setNotices(d || []))
+    } catch (e: any) {
+      notify.fromError(e, 'Could not post announcement')
+    }
   }
   const deleteNotice = async (id:string) => {
     try { 
       const token = localStorage.getItem('adhara_token')
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL||'http://localhost:3001/api/v1'}/notices/${id}`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}})
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL||'http://localhost:3001/api/v1'}/notices/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.message || 'Failed to delete announcement')
+      }
       setNotices(n=>n.filter((x:any)=>x.id!==id))
-    } catch{}
+      notify.success('Announcement deleted')
+    } catch (e: any) {
+      notify.fromError(e, 'Could not delete announcement')
+    }
   }
 
   const list = notices
@@ -1254,23 +1397,73 @@ function BulkUpload({ school }: { school: any }) {
     .filter((t: any) => t.isActive !== false)
     .map((t: any) => ({ code: String(t.code), label: String(t.name || String(t.code).replace('TRACK_', 'Track ')) }))
   const [csv, setCsv] = useState('')
-  const [defaults, setDefaults] = useState({ className: 'SS3A', track: '', termLabel: '2025/2026 Term 2' })
+  const resolvedTermLabel = (() => {
+    const y = String(school?.academicYearLabel || '').trim()
+    const t = String(school?.currentTermLabel || '').trim()
+    const joined = [y, t].filter(Boolean).join(' ').trim()
+    return joined || '2025/2026 Term 2'
+  })()
+  const [defaults, setDefaults] = useState({ className: 'SS3A', track: '', termLabel: resolvedTermLabel })
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [progress, setProgress] = useState<{ total: number; done: number; succeeded: number; failed: number } | null>(null)
   useEffect(() => {
     if (!trackOptions.length) return
     if (!trackOptions.some((t) => t.code === defaults.track)) {
       setDefaults((prev) => ({ ...prev, track: trackOptions[0].code }))
     }
   }, [JSON.stringify(trackOptions), defaults.track])
+  useEffect(() => {
+    setDefaults((prev) => ({ ...prev, termLabel: resolvedTermLabel }))
+  }, [resolvedTermLabel])
 
   const run = async (e: React.FormEvent) => {
-    e.preventDefault(); setLoading(true); setResult(null)
-    try { const r = await bulkUploadApi.csv(csv, school?.id || '', defaults); setResult(r) } catch (e: any) { notify.fromError(e) }
+    e.preventDefault(); setLoading(true); setResult(null); setProgress(null)
+    try {
+      // Upload in small batches so the UI can show progress.
+      const lines = csv
+        .trim()
+        .split(/\r?\n/)
+        .filter((l) => l.trim().length > 0)
+      if (lines.length < 2) {
+        notify.warning('CSV must include a header and at least one student row')
+        setLoading(false)
+        return
+      }
+      const header = lines[0]
+      const rows = lines.slice(1)
+      const total = rows.length
+      const BATCH_SIZE = 20
+      let done = 0
+      let succeeded = 0
+      let failed = 0
+      const combinedResults: any[] = []
+      setProgress({ total, done, succeeded, failed })
+
+      for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+        const batch = rows.slice(i, i + BATCH_SIZE)
+        const batchCsv = [header, ...batch].join('\n')
+        const r = await bulkUploadApi.csv(batchCsv, school?.id || '', defaults)
+        const batchSucceeded = typeof (r as any)?.succeeded === 'number' ? (r as any).succeeded : 0
+        const batchFailed = typeof (r as any)?.failed === 'number' ? (r as any).failed : 0
+        const batchResults = Array.isArray((r as any)?.results) ? (r as any).results : []
+        combinedResults.push(...batchResults)
+        done += batch.length
+        succeeded += batchSucceeded
+        failed += batchFailed
+        setProgress({ total, done, succeeded, failed })
+      }
+
+      const final = { total, succeeded, failed, results: combinedResults }
+      setResult(final)
+      notify.success(succeeded > 0 ? `Uploaded ${succeeded} students successfully` : 'Bulk upload completed')
+    } catch (e: any) {
+      notify.fromError(e)
+    }
     setLoading(false)
   }
 
-  const TEMPLATE = 'firstName,lastName,email,phone,className,track\nAisha,Okonkwo,aisha@example.com,08012345678,SS3A,TRACK_3'
+  const TEMPLATE = 'fullName\nAli Chidera Samuel\nEmeka Chukwuemeka Okorie\nSafiya Maryam Mohammed'
 
   return (
     <div>
@@ -1297,10 +1490,19 @@ function BulkUpload({ school }: { school: any }) {
             <div>
               <label className="form-label">CSV Data</label>
               <textarea className="form-input" rows={10} required placeholder={TEMPLATE} value={csv} onChange={e => setCsv(e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, resize: 'vertical' }} />
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>CSV columns: firstName, lastName, email, phone, className (optional), track (optional)</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>CSV columns: fullName (recommended) or firstName,lastName. Optional: email, username, phone, className, track</div>
             </div>
+            {progress && (
+              <div className="text-muted text-xs" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <span><strong style={{ color: 'var(--white)' }}>Progress:</strong> {progress.done}/{progress.total}</span>
+                <span><strong style={{ color: 'var(--success)' }}>Succeeded:</strong> {progress.succeeded}</span>
+                <span><strong style={{ color: 'var(--danger)' }}>Failed:</strong> {progress.failed}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 12 }}>
-              <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Uploading…' : `Upload Students →`}</button>
+              <button type="submit" className="btn btn-primary" disabled={loading}>
+                {loading ? (progress ? `Uploading ${progress.done}/${progress.total}…` : 'Uploading…') : `Upload Students →`}
+              </button>
               <button type="button" onClick={() => setCsv(TEMPLATE)} className="btn btn-ghost btn-sm">Load Example</button>
             </div>
           </form>
@@ -1318,7 +1520,10 @@ function BulkUpload({ school }: { school: any }) {
                 <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border2)' }}>
                   <span style={{ fontSize: 16 }}>{r.success ? '✅' : '❌'}</span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, color: 'var(--white)' }}>{r.email}</div>
+                    <div style={{ fontSize: 13, color: 'var(--white)' }}>
+                      {r.name || r.username || r.email || 'Student'}
+                    </div>
+                    {r.row && <div style={{ fontSize: 11, color: 'var(--muted)' }}>Row {r.row}</div>}
                     {r.regNumber && <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--teal2)' }}>{r.regNumber}</div>}
                     {r.error && <div style={{ fontSize: 11, color: 'var(--danger)' }}>{r.error}</div>}
                   </div>
@@ -1631,9 +1836,7 @@ function AdminDashboardInner() {
           <Link href="/dashboard/admin/complete-school-profile" className="btn btn-primary btn-sm">
             Edit full profile
           </Link>
-        ) : (
-          <button type="button" onClick={()=>setShowAdd(true)} className="btn btn-primary btn-sm">+ Add Student</button>
-        )
+        ) : null
       }>
       {renderSection()}
     </DashboardShell>

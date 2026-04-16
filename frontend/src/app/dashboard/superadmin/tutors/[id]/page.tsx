@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { DashboardShell } from '@/components/DashboardShell'
 import { TutorProfileDetail } from '@/components/TutorProfileDetail'
 import { tutorsApi, tracksApi } from '@/lib/api'
+import { notify } from '@/lib/notify'
 
 export default function SuperAdminTutorDetailPage() {
   const router = useRouter()
@@ -14,7 +15,9 @@ export default function SuperAdminTutorDetailPage() {
   const [loading, setLoading] = useState(true)
   const [tutor, setTutor] = useState<any>(null)
   const [err, setErr] = useState('')
+  const [verifying, setVerifying] = useState(false)
   const [trackArr, setTrackArr] = useState<any[]>([])
+  const [removingAssignmentId, setRemovingAssignmentId] = useState('')
 
   const nav = (section: string) => {
     router.push(`/dashboard/superadmin?section=${encodeURIComponent(section)}`)
@@ -45,6 +48,35 @@ export default function SuperAdminTutorDetailPage() {
   const trackLabel = (code: string) =>
     trackArr.find((x: any) => String(x.code).toUpperCase() === String(code).toUpperCase())?.name ||
     String(code).replace('TRACK_', 'Track ')
+
+  const toggleVerify = async () => {
+    if (!tutor?.id) return
+    setVerifying(true)
+    try {
+      const next = !tutor?.isVerified
+      const updated = await tutorsApi.setVerified(tutor.id, next)
+      setTutor(updated)
+      notify.success(next ? 'Tutor verified' : 'Tutor unverified')
+    } catch (e: any) {
+      notify.fromError(e)
+    }
+    setVerifying(false)
+  }
+
+  const removeAssignment = async (assignmentId: string) => {
+    const ok = window.confirm('Remove this assignment? This will end the assignment (set it inactive).')
+    if (!ok) return
+    setRemovingAssignmentId(assignmentId)
+    try {
+      await tutorsApi.removeAssignment(assignmentId)
+      const t = await tutorsApi.one(id)
+      setTutor(t)
+      notify.success('Assignment removed.')
+    } catch (e: any) {
+      notify.fromError(e)
+    }
+    setRemovingAssignmentId('')
+  }
 
   if (loading) {
     return (
@@ -78,12 +110,71 @@ export default function SuperAdminTutorDetailPage() {
       onSectionChange={nav}
       navBadges={{}}
       topbarRight={
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => nav('tutors')}>
-          ← All tutors
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className={`btn ${tutor?.isVerified ? 'btn-ghost' : 'btn-primary'} btn-sm`}
+            onClick={toggleVerify}
+            disabled={verifying}
+            title="Mark this tutor as verified after reviewing KYC"
+            style={{ justifyContent: 'center', minWidth: 140 }}
+          >
+            {verifying ? 'Saving…' : tutor?.isVerified ? 'Unverify' : 'Verify tutor'}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => nav('tutors')}>
+            ← All tutors
+          </button>
+        </div>
       }
     >
       <TutorProfileDetail tutor={tutor} trackLabel={trackLabel} />
+      <div className="card mt-20">
+        <div className="font-display fw-600 text-white mb-16" style={{ fontSize: 16 }}>Manage assignments</div>
+        {!(tutor?.assignments || []).length ? (
+          <p className="text-muted text-sm">No assignments</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>School</th>
+                  <th>Class</th>
+                  <th>Track</th>
+                  <th>Term</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(tutor.assignments as any[]).map((a: any) => (
+                  <tr key={a.id}>
+                    <td>{a.school?.name || '—'}</td>
+                    <td>{a.className}</td>
+                    <td>{trackLabel(a.track)}</td>
+                    <td style={{ fontSize: 12 }}>{a.termLabel}</td>
+                    <td>
+                      <span className={`badge badge-${a.isActive !== false ? 'success' : 'warning'}`}>
+                        {a.isActive !== false ? 'Active' : 'Ended'}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        style={{ fontSize: 11 }}
+                        disabled={removingAssignmentId === a.id || a.isActive === false}
+                        onClick={() => removeAssignment(a.id)}
+                      >
+                        {removingAssignmentId === a.id ? 'Removing…' : 'Remove'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </DashboardShell>
   )
 }

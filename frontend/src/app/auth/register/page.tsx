@@ -20,7 +20,11 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (form.password !== form.confirmPw) { setError('Passwords do not match'); return }
+    if (form.password !== form.confirmPw) {
+      notify.error('Passwords do not match')
+      setError('Passwords do not match')
+      return
+    }
     setError(''); setLoading(true)
     try {
       const data = await authApi.register({
@@ -30,10 +34,12 @@ export default function RegisterPage() {
         address: form.address, state: form.state, lga: form.lga,
       })
       localStorage.setItem('adhara_token', data.token)
+      if (data.user) localStorage.setItem('adhara_user', JSON.stringify(data.user))
       notify.success('School account created — taking you to your dashboard.')
       router.push('/dashboard/admin')
     } catch (err: any) {
-      setError(err.message || 'Registration failed. Please try again.')
+      notify.fromError(err, 'Registration failed. Please try again.')
+      setError(err?.message || 'Registration failed. Please try again.')
     }
     setLoading(false)
   }

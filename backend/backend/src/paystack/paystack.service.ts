@@ -94,12 +94,13 @@ export class PaystackService {
     // Notify school admin
     const adminEmails = payment.school.admins.map((a: any) => a.email);
     if (adminEmails.length) {
-      await this.email.send(
-        adminEmails,
-        `Payment Confirmed: ${payment.description}`,
-        `<p>Your payment of <strong>₦${payment.amount.toLocaleString()}</strong> for <strong>${payment.description}</strong> has been confirmed.</p>
-         <p>Reference: ${reference}</p><p>AdharaEdu © 2026</p>`
-      );
+      await this.email.sendPaystackPaymentConfirmation({
+        email: adminEmails,
+        schoolName: payment.school.name,
+        amount: payment.amount,
+        description: payment.description,
+        reference,
+      });
     }
 
     // Notify super admin

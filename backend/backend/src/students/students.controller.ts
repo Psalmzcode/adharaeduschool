@@ -26,8 +26,9 @@ export class StudentsController {
     @Query('className') className?: string,
     @Query('track') track?: TrackLevel,
     @Query('search') search?: string,
+    @Query('termLabel') termLabel?: string,
   ) {
-    return this.studentsService.findAll(schoolId, { className, track, search });
+    return this.studentsService.findAll(schoolId, { className, track, search, termLabel });
   }
 
   @Get('me')
@@ -62,6 +63,43 @@ export class StudentsController {
     return this.studentsService.findOne(id);
   }
 
+  @Post(':id/reset-password')
+  @Roles('SUPER_ADMIN', 'SCHOOL_ADMIN', 'TUTOR')
+  @ApiOperation({ summary: 'Reset a student password (returns a one-time temporary password)' })
+  async resetPassword(@Param('id') id: string, @Request() req) {
+    const student = await this.prisma.student.findUnique({
+      where: { id },
+      select: { id: true, schoolId: true, className: true, userId: true },
+    });
+    if (!student) throw new ForbiddenException('Student not found');
+
+    if (req.user.role === 'SCHOOL_ADMIN') {
+      const school = await this.prisma.school.findFirst({
+        where: { id: student.schoolId, admins: { some: { id: req.user.sub } } },
+        select: { id: true },
+      });
+      if (!school) throw new ForbiddenException('Not authorized for this school');
+    }
+
+    if (req.user.role === 'TUTOR') {
+      const tutor = await this.prisma.tutor.findUnique({ where: { userId: req.user.sub }, select: { id: true } });
+      const assignment = tutor
+        ? await this.prisma.tutorAssignment.findFirst({
+            where: {
+              tutorId: tutor.id,
+              schoolId: student.schoolId,
+              className: student.className,
+              isActive: true,
+            },
+            select: { id: true },
+          })
+        : null;
+      if (!assignment) throw new ForbiddenException('Tutor not assigned to this class');
+    }
+
+    return this.studentsService.resetStudentPassword(student.id, req.user.sub);
+  }
+
   @Post()
   @Roles('SCHOOL_ADMIN', 'SUPER_ADMIN')
   create(@Body() body: any) {
@@ -78,6 +116,79 @@ export class StudentsController {
   @Roles('SCHOOL_ADMIN', 'SUPER_ADMIN')
   update(@Param('id') id: string, @Body() body: any) {
     return this.studentsService.update(id, body);
+  }
+
+  @Patch(':id/deactivate')
+  @Roles('SUPER_ADMIN', 'SCHOOL_ADMIN', 'TUTOR')
+  @ApiOperation({ summary: 'Deactivate a student (soft delete)' })
+  async deactivate(@Param('id') id: string, @Request() req) {
+    const student = await this.prisma.student.findUnique({
+      where: { id },
+      select: { id: true, schoolId: true, className: true, userId: true },
+    });
+    if (!student) throw new ForbiddenException('Student not found');
+
+    if (req.user.role === 'SCHOOL_ADMIN') {
+      const school = await this.prisma.school.findFirst({
+        where: { id: student.schoolId, admins: { some: { id: req.user.sub } } },
+        select: { id: true },
+      });
+      if (!school) throw new ForbiddenException('Not authorized for this school');
+    }
+
+    if (req.user.role === 'TUTOR') {
+      const tutor = await this.prisma.tutor.findUnique({ where: { userId: req.user.sub }, select: { id: true } });
+      const assignment = tutor
+        ? await this.prisma.tutorAssignment.findFirst({
+            where: {
+              tutorId: tutor.id,
+              schoolId: student.schoolId,
+              className: student.className,
+              isActive: true,
+            },
+            select: { id: true },
+          })
+        : null;
+      if (!assignment) throw new ForbiddenException('Tutor not assigned to this class');
+    }
+
+    return this.studentsService.deactivate(student.id);
+  }
+
+  @Patch(':id/tutor-update')
+  @Roles('TUTOR')
+  @ApiOperation({ summary: 'Tutor update student name (assigned class only)' })
+  async tutorUpdate(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: { firstName?: string; lastName?: string; fullName?: string },
+  ) {
+    const student = await this.prisma.student.findUnique({
+      where: { id },
+      select: { id: true, schoolId: true, className: true },
+    });
+    if (!student) throw new ForbiddenException('Student not found');
+
+    const tutor = await this.prisma.tutor.findUnique({ where: { userId: req.user.sub }, select: { id: true } });
+    const assignment = tutor
+      ? await this.prisma.tutorAssignment.findFirst({
+          where: {
+            tutorId: tutor.id,
+            schoolId: student.schoolId,
+            className: student.className,
+            isActive: true,
+          },
+          select: { id: true },
+        })
+      : null;
+    if (!assignment) throw new ForbiddenException('Tutor not assigned to this class');
+
+    const full = String(body?.fullName || '').trim().replace(/\s+/g, ' ');
+    const parts = full ? full.split(' ') : [];
+    const fn = String(body?.firstName || (parts[0] || '')).trim();
+    const ln = String(body?.lastName || (parts.length > 1 ? parts.slice(1).join(' ') : '')).trim();
+
+    return this.studentsService.updateStudentName(student.id, fn, ln);
   }
 
   @Post('bulk-csv')

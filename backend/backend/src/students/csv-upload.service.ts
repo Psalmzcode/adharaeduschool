@@ -7,7 +7,11 @@ export class CsvUploadService {
   constructor(private students: StudentsService) {}
 
   async processCSV(csvText: string, schoolId: string, defaults: { className: string; track: string; termLabel: string }) {
-    // Parse CSV — expects: firstName,lastName,email,phone,className,track
+    // Parse CSV — header row required.
+    // Supported columns:
+    // - fullName | fullname | name (single column; e.g. "Ali Chidera Samuel")
+    // - firstName/lastName (or first_name/last_name)
+    // Optional: email, username, phone, className/class, track
     const lines = csvText
       .trim()
       .split(/\r?\n/)
@@ -21,27 +25,58 @@ export class CsvUploadService {
 
     const results: any[] = [];
 
+    const splitFullName = (fullName: string) => {
+      const cleaned = String(fullName || '').trim().replace(/\s+/g, ' ');
+      if (!cleaned) return { firstName: '', lastName: '' };
+      const parts = cleaned.split(' ');
+      if (parts.length === 1) return { firstName: parts[0], lastName: 'Student' };
+      return { firstName: parts[0], lastName: parts.slice(1).join(' ') || 'Student' };
+    };
+
     for (let i = 1; i < lines.length; i++) {
       const row = lines[i].split(",");
-      if (!row.length || !col(row, "email")) continue;
+      const fullNameRaw = (col(row, "fullname") || col(row, "full_name") || col(row, "name")).trim();
+      const nameFromFull = splitFullName(fullNameRaw);
+      const firstName = ((col(row, "firstname") || col(row, "first_name")) || nameFromFull.firstName).trim();
+      const lastName = ((col(row, "lastname") || col(row, "last_name")) || nameFromFull.lastName).trim();
+      if (!firstName) continue;
+      const displayName = fullNameRaw || `${firstName} ${lastName || 'Student'}`.trim();
+
+      const emailRaw = col(row, "email").trim();
+      const usernameRaw = col(row, "username").trim();
 
       try {
         const data = {
           schoolId,
-          firstName: col(row, "firstname") || col(row, "first_name"),
-          lastName: col(row, "lastname") || col(row, "last_name"),
-          email: col(row, "email"),
+          firstName,
+          lastName: lastName || "Student",
+          email: emailRaw || undefined,
+          username: usernameRaw || undefined,
           phone: col(row, "phone") || undefined,
           className: col(row, "classname") || col(row, "class") || defaults.className,
           track: (col(row, "track") || defaults.track) as any,
           termLabel: defaults.termLabel,
         };
 
-        const student = await this.students.create(data);
+        const created = await this.students.create(data);
 
-        results.push({ success: true, email: data.email, regNumber: student.regNumber });
+        results.push({
+          success: true,
+          row: i,
+          name: displayName,
+          email: data.email,
+          username: (created as any).user?.username,
+          regNumber: created.regNumber,
+        });
       } catch (e: any) {
-        results.push({ success: false, email: row[headers.indexOf("email")]?.trim(), error: e.message });
+        const emailIdx = headers.indexOf("email");
+        results.push({
+          success: false,
+          row: i,
+          name: displayName,
+          email: emailIdx >= 0 ? row[emailIdx]?.trim() : undefined,
+          error: e.message,
+        });
       }
     }
 

@@ -2,10 +2,16 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { TrackLevel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TutorsService } from '../tutors/tutors.service';
+import { ClassCurriculumService } from '../curriculum/class-curriculum.service';
+import { CurriculumLessonsService } from '../curriculum/curriculum-lessons.service';
 
 @Injectable()
 export class SessionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private classCurriculum: ClassCurriculumService,
+    private curriculumLessons: CurriculumLessonsService,
+  ) {}
 
   async startSession(
     tutorUserId: string,
@@ -17,6 +23,8 @@ export class SessionsService {
       notes?: string;
       tutorAssignmentId?: string;
       moduleId?: string;
+      /** Required when the chosen module has at least one published curriculum lesson. */
+      lessonId?: string;
     },
   ) {
     const tutor = await this.prisma.tutor.findUnique({
@@ -65,11 +73,32 @@ export class SessionsService {
     }
 
     let moduleId: string | null = data.moduleId?.trim() || null;
+    let lessonId: string | null = data.lessonId?.trim() || null;
+
+    if (lessonId) {
+      const lesson = await this.prisma.curriculumLesson.findUnique({
+        where: { id: lessonId },
+        include: { module: true },
+      });
+      if (!lesson) throw new BadRequestException('Curriculum lesson not found');
+      if (!lesson.isPublished) throw new BadRequestException('This curriculum lesson is not published');
+      if (String(lesson.module.track) !== String(track)) {
+        throw new BadRequestException('Lesson does not match this class track');
+      }
+      moduleId = lesson.moduleId;
+    }
+
     if (moduleId) {
       const mod = await this.prisma.module.findUnique({ where: { id: moduleId } });
       if (!mod) throw new BadRequestException('Module not found');
       if (String(mod.track) !== String(track)) {
         throw new BadRequestException('Selected module does not match this class track');
+      }
+      const publishedCount = await this.curriculumLessons.countPublishedInModule(moduleId);
+      if (publishedCount > 0 && !lessonId) {
+        throw new BadRequestException(
+          'This module has published curriculum lessons — select which lesson you are delivering.',
+        );
       }
     }
 
@@ -87,8 +116,12 @@ export class SessionsService {
         track,
         moduleTitle: data.moduleTitle,
         notes: data.notes,
+        termLabel: (tutorAssignmentId
+          ? (await this.prisma.tutorAssignment.findUnique({ where: { id: tutorAssignmentId }, select: { termLabel: true } }))?.termLabel
+          : null) || null,
         tutorAssignmentId,
         moduleId,
+        lessonId,
         startedAt: new Date(),
       },
     });
@@ -102,10 +135,20 @@ export class SessionsService {
       studentsPresent !== undefined && studentsPresent !== null && !Number.isNaN(Number(studentsPresent))
         ? Math.max(0, Math.floor(Number(studentsPresent)))
         : session.studentsPresent ?? 0;
-    return this.prisma.sessionLog.update({
+    const updated = await this.prisma.sessionLog.update({
       where: { id: sessionId },
       data: { endedAt: new Date(), durationMins, studentsPresent: present, notes },
     });
+
+    await this.classCurriculum.recordDeliveryAfterSession({
+      id: updated.id,
+      schoolId: updated.schoolId,
+      className: updated.className,
+      lessonId: updated.lessonId,
+      track: updated.track,
+    });
+
+    return updated;
   }
 
   async getActiveSession(tutorUserId: string) {
@@ -114,6 +157,7 @@ export class SessionsService {
       orderBy: { startedAt: 'desc' },
       include: {
         module: { select: { id: true, title: true, number: true } },
+        lesson: { select: { id: true, title: true, position: true } },
         tutorAssignment: { select: { id: true, className: true, track: true } },
       },
     });
@@ -131,6 +175,7 @@ export class SessionsService {
       include: {
         school: { select: { name: true } },
         module: { select: { id: true, title: true, number: true } },
+        lesson: { select: { id: true, title: true, position: true } },
         tutorAssignment: { select: { id: true } },
       },
       orderBy: { startedAt: 'desc' },
@@ -142,9 +187,13 @@ export class SessionsService {
    * @param from - ISO date or YYYY-MM-DD (start of day UTC)
    * @param to - ISO date or YYYY-MM-DD (end of day UTC)
    */
-  async getSchoolSessions(schoolId: string, limit = 100, from?: string, to?: string) {
+  async getSchoolSessions(schoolId: string, limit = 100, from?: string, to?: string, termLabel?: string) {
     const take = Math.min(Math.max(Number(limit) || 100, 1), 500);
-    const where: { schoolId: string; startedAt?: { gte?: Date; lte?: Date } } = { schoolId };
+    const where: any = { schoolId };
+    if (termLabel?.trim()) {
+      // Only sessions linked to an assignment can be reliably attributed to a term.
+      where.tutorAssignment = { termLabel: termLabel.trim() };
+    }
 
     const parseFrom = (s?: string): Date | undefined => {
       if (!s?.trim()) return undefined;
@@ -172,7 +221,8 @@ export class SessionsService {
       include: {
         tutor: { select: { firstName: true, lastName: true } },
         module: { select: { id: true, title: true, number: true, track: true } },
-        tutorAssignment: { select: { id: true, className: true, track: true } },
+        lesson: { select: { id: true, title: true, position: true } },
+        tutorAssignment: { select: { id: true, className: true, track: true, termLabel: true } },
       },
       orderBy: { startedAt: 'desc' },
       take,

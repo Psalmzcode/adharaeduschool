@@ -62,12 +62,14 @@ export class SessionsController {
     @Query('limit') limit?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('termLabel') termLabel?: string,
   ) {
     return this.sessionsService.getSchoolSessions(
       schoolId,
       limit ? parseInt(limit, 10) : undefined,
       from,
       to,
+      termLabel,
     );
   }
 }

@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AdharaEdu — Email template previews</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #1c1c1e; color: #f5f5f7; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; font-weight: 700; margin: 0 0 8px; }
+    p.note { color: #8e8e93; font-size: 14px; margin: 0 0 16px; max-width: 720px; line-height: 1.5; }
+    p.warn { background: rgba(212,168,83,0.12); border: 1px solid rgba(212,168,83,0.25); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: #e8e0d0; margin: 0 0 20px; max-width: 720px; }
+    nav.toc { margin: 0 0 28px; font-size: 13px; line-height: 1.8; }
+    nav.toc a { color: #5ac8fa; text-decoration: none; }
+    nav.toc a:hover { text-decoration: underline; }
+    section { margin-bottom: 48px; scroll-margin-top: 16px; }
+    .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #d4a853; margin-bottom: 12px; }
+    .frame { background: #f2f2f7; border-radius: 16px; padding: 24px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Email design previews</h1>
+  <p class="note">
+    Static samples mirroring <code>backend/src/email/templates/layout.ts</code> (<code>emailHeaderBrand</code> + <code>emailDocument</code>).
+    Run the Next app from the <strong>frontend</strong> folder and open:
+    <strong><a href="/email-design-previews.html" style="color:#5ac8fa">/email-design-previews.html</a></strong>
+    (file: <code>frontend/public/email-design-previews.html</code>).
+  </p>
+  <p class="warn">
+    If you get <strong>404</strong>: ensure <code>pnpm dev</code> runs in the <code>frontend</code> project (not the repo root only). If the page is blank, hard-refresh (Ctrl+Shift+R).
+  </p>
+
+  <nav class="toc" aria-label="Jump to template">
+    <strong>Jump to:</strong>
+    <a href="#otp">OTP</a> ·
+    <a href="#tutor-welcome">Tutor welcome</a> ·
+    <a href="#school-approved">School approved</a> ·
+    <a href="#report-submitted">Report submitted</a> ·
+    <a href="#payment">Payment</a> ·
+    <a href="#exam-result">Exam result</a>
+  </nav>
+
+  <!-- ═══ Shared header block (same as emailHeaderBrand() in layout.ts) ═══ -->
+
+  <section id="otp">
+    <div class="label">OTP / verification — templateOtp</div>
+    <div class="frame">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F2F7;">
+        <tr><td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;">
+            <tr><td style="background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="background:linear-gradient(135deg,#050D1A 0%,#0F1F38 100%);padding:0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:28px 28px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0"><tr>
+                        <td style="background:#1E7FD4;width:40px;height:40px;border-radius:11px;text-align:center;vertical-align:middle;font-size:20px;line-height:40px;">⭐</td>
+                        <td style="padding-left:12px;vertical-align:middle;font-family:Arial Black,Helvetica,Arial,sans-serif;font-size:20px;font-weight:900;color:#ffffff;">Adhara<span style="color:#D4A853">Edu</span></td>
+                      </tr></table>
+                      <p style="margin:10px 0 0;font-size:11px;color:rgba(255,255,255,0.55);letter-spacing:0.02em;">Learn Smart. Grow Together</p>
+                    </td></tr>
+                  </table>
+                </td></tr>
+              </table>
+              <div style="padding:28px 28px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1C1C1E;font-size:17px;line-height:1.47;">
+                <p style="margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8E8E93;">Verification</p>
+                <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;letter-spacing:-0.4px;color:#1C1C1E;line-height:1.2;">Your verification code</h1>
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.55;color:#8E8E93;">Hi Aisha — use this code to sign in to your account.</p>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px auto;"><tr>
+                  <td style="width:44px;height:52px;text-align:center;vertical-align:middle;background:#F2F2F7;border-radius:12px;border:1px solid #E5E5EA;font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;color:#1C1C1E;">4</td>
+                  <td width="8"></td>
+                  <td style="width:44px;height:52px;text-align:center;vertical-align:middle;background:#F2F2F7;border-radius:12px;border:1px solid #E5E5EA;font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;color:#1C1C1E;">8</td>
+                  <td width="8"></td>
+                  <td style="width:44px;height:52px;text-align:center;vertical-align:middle;background:#F2F2F7;border-radius:12px;border:1px solid #E5E5EA;font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;color:#1C1C1E;">2</td>
+                  <td width="8"></td>
+                  <td style="width:44px;height:52px;text-align:center;vertical-align:middle;background:#F2F2F7;border-radius:12px;border:1px solid #E5E5EA;font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;color:#1C1C1E;">9</td>
+                  <td width="8"></td>
+                  <td style="width:44px;height:52px;text-align:center;vertical-align:middle;background:#F2F2F7;border-radius:12px;border:1px solid #E5E5EA;font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;color:#1C1C1E;">1</td>
+                  <td width="8"></td>
+                  <td style="width:44px;height:52px;text-align:center;vertical-align:middle;background:#F2F2F7;border-radius:12px;border:1px solid #E5E5EA;font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;color:#1C1C1E;">5</td>
+                </tr></table>
+                <p style="margin:12px 0 4px;font-size:12px;line-height:1.5;color:#8E8E93;text-align:center;">Copy the full code (select all on one line):</p>
+                <p style="margin:0 0 20px;font-size:22px;font-weight:700;font-family:ui-monospace,Menlo,monospace;letter-spacing:0.18em;color:#1C1C1E;text-align:center;-webkit-user-select:all;user-select:all;">482915</p>
+                <p style="margin:0 0 20px;font-size:13px;line-height:1.5;color:#8E8E93;text-align:center;">This code expires in <strong style="color:#1C1C1E;">10 minutes</strong>.</p>
+                <div style="height:1px;background:#E5E5EA;margin:20px 0;"></div>
+                <p style="margin:0;font-size:12px;line-height:1.5;color:#8E8E93;">If you didn’t request this email, you can safely ignore it.</p>
+              </div>
+            </td></tr>
+            <tr><td style="padding:24px 8px 0;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:12px;line-height:1.5;color:#8E8E93;">
+              AdharaEdu · adharaedu.com<br>© 2026 AdharaEdu Consultancy &amp; Technology Solutions
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="tutor-welcome">
+    <div class="label">Tutor welcome — templateTutorWelcome</div>
+    <div class="frame">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F2F7;">
+        <tr><td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;">
+            <tr><td style="background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="background:linear-gradient(135deg,#050D1A 0%,#0F1F38 100%);padding:0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:28px 28px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0"><tr>
+                        <td style="background:#1E7FD4;width:40px;height:40px;border-radius:11px;text-align:center;vertical-align:middle;font-size:20px;line-height:40px;">⭐</td>
+                        <td style="padding-left:12px;vertical-align:middle;font-family:Arial Black,Helvetica,Arial,sans-serif;font-size:20px;font-weight:900;color:#ffffff;">Adhara<span style="color:#D4A853">Edu</span></td>
+                      </tr></table>
+                      <p style="margin:10px 0 0;font-size:11px;color:rgba(255,255,255,0.55);letter-spacing:0.02em;">Learn Smart. Grow Together</p>
+                    </td></tr>
+                  </table>
+                </td></tr>
+              </table>
+              <div style="padding:28px 28px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1C1C1E;font-size:17px;line-height:1.47;">
+                <p style="margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8E8E93;">Tutor account</p>
+                <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;letter-spacing:-0.4px;color:#1C1C1E;line-height:1.2;">Welcome, Ngozi</h1>
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.55;color:#3A3A3C;">Welcome to the <strong>AdharaEdu</strong> tutoring team. Your account has been created. Before you can be deployed to a school, you need to <strong>complete your onboarding profile</strong> and <strong>KYC verification</strong>.</p>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F2F7;border-radius:16px;margin:16px 0;">
+                  <tr><td style="padding:18px 20px;">
+                    <div style="font-size:13px;color:#8E8E93;">Sign-in email</div>
+                    <div style="font-size:15px;font-weight:600;color:#1C1C1E;margin-top:4px;">tutor@example.com</div>
+                    <div style="margin-top:14px;font-size:13px;color:#8E8E93;">Temporary password</div>
+                    <div style="font-size:15px;font-weight:700;font-family:ui-monospace,monospace;letter-spacing:0.04em;color:#1C1C1E;margin-top:4px;">Tutor@123</div>
+                  </td></tr>
+                </table>
+                <p style="margin:0 0 12px;font-size:15px;font-weight:600;color:#1C1C1E;">Next steps</p>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
+                  <tr><td style="padding:10px 0;border-bottom:1px solid #E5E5EA;font-size:15px;color:#3A3A3C;"><span style="display:inline-block;min-width:22px;font-weight:800;color:#1E7FD4;">1</span> Sign in and change your password if prompted.</td></tr>
+                  <tr><td style="padding:10px 0;border-bottom:1px solid #E5E5EA;font-size:15px;color:#3A3A3C;"><span style="display:inline-block;min-width:22px;font-weight:800;color:#1E7FD4;">2</span> Open onboarding and fill your profile (bio, tracks, bank details as required).</td></tr>
+                  <tr><td style="padding:10px 0;font-size:15px;color:#3A3A3C;"><span style="display:inline-block;min-width:22px;font-weight:800;color:#1E7FD4;">3</span> Upload KYC: ID, passport-style photo, signature, and guarantors as requested.</td></tr>
+                </table>
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.55;color:#8E8E93;">Once your onboarding is complete and verified, our team can assign you to a school.</p>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 12px;"><tr><td style="border-radius:14px;background:#1E7FD4;"><a href="#" style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:14px;">Complete onboarding</a></td></tr></table>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 20px;"><tr><td style="border-radius:14px;background:rgba(212,168,83,0.12);border:1px solid rgba(212,168,83,0.35);"><a href="#" style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:600;color:#6B5A2A;text-decoration:none;border-radius:14px;">Sign in</a></td></tr></table>
+                <p style="margin:0;font-size:14px;line-height:1.55;color:#8E8E93;">If you did not expect this email, contact AdharaEdu support.</p>
+              </div>
+            </td></tr>
+            <tr><td style="padding:24px 8px 0;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:12px;line-height:1.5;color:#8E8E93;">
+              AdharaEdu · adharaedu.com<br>© 2026 AdharaEdu Consultancy &amp; Technology Solutions
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="school-approved">
+    <div class="label">School approved — templateSchoolApproved</div>
+    <div class="frame">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F2F7;">
+        <tr><td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;">
+            <tr><td style="background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="background:linear-gradient(135deg,#050D1A 0%,#0F1F38 100%);padding:0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:28px 28px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0"><tr>
+                        <td style="background:#1E7FD4;width:40px;height:40px;border-radius:11px;text-align:center;vertical-align:middle;font-size:20px;line-height:40px;">⭐</td>
+                        <td style="padding-left:12px;vertical-align:middle;font-family:Arial Black,Helvetica,Arial,sans-serif;font-size:20px;font-weight:900;color:#ffffff;">Adhara<span style="color:#D4A853">Edu</span></td>
+                      </tr></table>
+                      <p style="margin:10px 0 0;font-size:11px;color:rgba(255,255,255,0.55);letter-spacing:0.02em;">Learn Smart. Grow Together</p>
+                    </td></tr>
+                  </table>
+                </td></tr>
+              </table>
+              <div style="padding:28px 28px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1C1C1E;font-size:17px;line-height:1.47;">
+                <p style="margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8E8E93;">Approved</p>
+                <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;">You’re live, Amaka</h1>
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.55;color:#3A3A3C;"><strong style="color:#1C1C1E;">Green Academy Secondary School</strong> is approved on AdharaEdu.</p>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;">
+                  <tr><td style="padding:14px 0;border-bottom:1px solid #E5E5EA;"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:rgba(212,168,83,0.12);color:#8B6914;font-weight:800;font-size:12px;">1</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">Complete your school profile in the admin portal.</span></td></tr>
+                  <tr><td style="padding:14px 0;border-bottom:1px solid #E5E5EA;"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:rgba(212,168,83,0.12);color:#8B6914;font-weight:800;font-size:12px;">2</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">Add students — individually or via CSV.</span></td></tr>
+                  <tr><td style="padding:14px 0;"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:rgba(212,168,83,0.12);color:#8B6914;font-weight:800;font-size:12px;">3</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">Your tutor will reach out to schedule the first session.</span></td></tr>
+                </table>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 20px;"><tr><td style="border-radius:14px;background:#1E7FD4;"><a href="#" style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:14px;">Open admin dashboard</a></td></tr></table>
+              </div>
+            </td></tr>
+            <tr><td style="padding:24px 8px 0;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:12px;line-height:1.5;color:#8E8E93;">
+              AdharaEdu · adharaedu.com<br>© 2026 AdharaEdu Consultancy &amp; Technology Solutions
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="report-submitted">
+    <div class="label">Weekly report submitted (super admin) — templateReportSubmitted</div>
+    <div class="frame">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F2F7;">
+        <tr><td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;">
+            <tr><td style="background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="background:linear-gradient(135deg,#050D1A 0%,#0F1F38 100%);padding:0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:28px 28px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0"><tr>
+                        <td style="background:#1E7FD4;width:40px;height:40px;border-radius:11px;text-align:center;vertical-align:middle;font-size:20px;line-height:40px;">⭐</td>
+                        <td style="padding-left:12px;vertical-align:middle;font-family:Arial Black,Helvetica,Arial,sans-serif;font-size:20px;font-weight:900;color:#ffffff;">Adhara<span style="color:#D4A853">Edu</span></td>
+                      </tr></table>
+                      <p style="margin:10px 0 0;font-size:11px;color:rgba(255,255,255,0.55);letter-spacing:0.02em;">Learn Smart. Grow Together</p>
+                    </td></tr>
+                  </table>
+                </td></tr>
+              </table>
+              <div style="padding:28px 28px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1C1C1E;font-size:17px;line-height:1.47;">
+                <p style="margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8E8E93;">Super admin</p>
+                <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;">Weekly report submitted</h1>
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.55;color:#3A3A3C;"><strong>Funke Okonkwo</strong> submitted a report for <strong>Crown Heights SS</strong>.</p>
+                <div style="padding:14px 16px;background:#F2F2F7;border-radius:12px;font-size:15px;color:#3A3A3C;margin:12px 0 20px;">14 Apr 2026 → 20 Apr 2026</div>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 20px;"><tr><td style="border-radius:14px;background:rgba(212,168,83,0.12);border:1px solid rgba(212,168,83,0.35);"><a href="#" style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:600;color:#6B5A2A;text-decoration:none;border-radius:14px;">Review report</a></td></tr></table>
+              </div>
+            </td></tr>
+            <tr><td style="padding:24px 8px 0;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:12px;line-height:1.5;color:#8E8E93;">
+              AdharaEdu · adharaedu.com<br>© 2026 AdharaEdu Consultancy &amp; Technology Solutions
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="payment">
+    <div class="label">Payment receipt — templatePaymentReceipt</div>
+    <div class="frame">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F2F7;">
+        <tr><td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;">
+            <tr><td style="background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="background:linear-gradient(135deg,#050D1A 0%,#0F1F38 100%);padding:0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:28px 28px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0"><tr>
+                        <td style="background:#1E7FD4;width:40px;height:40px;border-radius:11px;text-align:center;vertical-align:middle;font-size:20px;line-height:40px;">⭐</td>
+                        <td style="padding-left:12px;vertical-align:middle;font-family:Arial Black,Helvetica,Arial,sans-serif;font-size:20px;font-weight:900;color:#ffffff;">Adhara<span style="color:#D4A853">Edu</span></td>
+                      </tr></table>
+                      <p style="margin:10px 0 0;font-size:11px;color:rgba(255,255,255,0.55);letter-spacing:0.02em;">Learn Smart. Grow Together</p>
+                    </td></tr>
+                  </table>
+                </td></tr>
+              </table>
+              <div style="padding:28px 28px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1C1C1E;">
+                <p style="margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8E8E93;">Receipt</p>
+                <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;">Payment received</h1>
+                <p style="margin:0 0 16px;font-size:16px;color:#8E8E93;">Thank you, Crown Heights SS. Your payment is confirmed.</p>
+                <table role="presentation" width="100%" style="background:#F0FDF4;border-radius:16px;border:1px solid #BBF7D0;margin:12px 0;">
+                  <tr><td style="padding:18px 20px;">
+                    <div style="font-size:13px;color:#166534;">Reference</div>
+                    <div style="font-size:14px;font-weight:600;font-family:ui-monospace;">ADH-PAY-2026-XK92</div>
+                    <div style="margin-top:12px;font-size:13px;color:#166534;">Amount</div>
+                    <div style="font-size:24px;font-weight:800;color:#14532d;">₦450,000</div>
+                  </td></tr>
+                </table>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 20px;">
+                  <tr><td style="border-radius:14px;background:#1E7FD4;">
+                    <a href="#" style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:14px;">Open dashboard</a>
+                  </td></tr>
+                </table>
+              </div>
+            </td></tr>
+            <tr><td style="padding:24px 8px 0;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:12px;line-height:1.5;color:#8E8E93;">
+              AdharaEdu · adharaedu.com<br>© 2026 AdharaEdu Consultancy &amp; Technology Solutions
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="exam-result">
+    <div class="label">Exam result — templateExamResult</div>
+    <div class="frame">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F2F7;">
+        <tr><td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="100%" style="max-width:600px;">
+            <tr><td style="background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="background:linear-gradient(135deg,#050D1A 0%,#0F1F38 100%);padding:0;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:28px 28px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0"><tr>
+                        <td style="background:#1E7FD4;width:40px;height:40px;border-radius:11px;text-align:center;vertical-align:middle;font-size:20px;line-height:40px;">⭐</td>
+                        <td style="padding-left:12px;vertical-align:middle;font-family:Arial Black,Helvetica,Arial,sans-serif;font-size:20px;font-weight:900;color:#ffffff;">Adhara<span style="color:#D4A853">Edu</span></td>
+                      </tr></table>
+                      <p style="margin:10px 0 0;font-size:11px;color:rgba(255,255,255,0.55);letter-spacing:0.02em;">Learn Smart. Grow Together</p>
+                    </td></tr>
+                  </table>
+                </td></tr>
+              </table>
+              <div style="padding:28px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+                <p style="margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#8E8E93;">Results</p>
+                <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;color:#1C1C1E;">Great work</h1>
+                <p style="margin:0 0 16px;font-size:16px;color:#8E8E93;">Hi Chidi — here’s how you did on Track 2 Midterm.</p>
+                <table role="presentation" width="100%"><tr><td align="center" style="padding:28px 16px;background:#F2F2F7;border-radius:20px;">
+                  <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#8E8E93;margin-bottom:8px;">Score</div>
+                  <div style="font-size:44px;font-weight:800;letter-spacing:-1px;color:#34C759;line-height:1;">87<span style="font-size:22px;">%</span></div>
+                  <div style="margin-top:12px;display:inline-block;padding:6px 14px;border-radius:100px;font-size:13px;font-weight:700;background:rgba(52,199,89,0.12);color:#34C759;">Passed · B+</div>
+                </td></tr></table>
+              </div>
+            </td></tr>
+            <tr><td style="padding:24px 8px 0;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:12px;line-height:1.5;color:#8E8E93;">
+              AdharaEdu · adharaedu.com<br>© 2026 AdharaEdu Consultancy &amp; Technology Solutions
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </div>
+  </section>
+</body>
+</html>

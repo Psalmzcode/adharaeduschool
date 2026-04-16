@@ -11,8 +11,8 @@ export class ModulesController {
   constructor(private modulesService: ModulesService) {}
 
   @Get()
-  findAll(@Query('track') track?: string) {
-    return this.modulesService.findAll(track);
+  findAll(@Query('track') track?: string, @Query('track3Stack') track3Stack?: string) {
+    return this.modulesService.findAll(track, track3Stack);
   }
 
   @Get('class-progress')

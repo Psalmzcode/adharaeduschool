@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, Request, UseGuards, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { CbtService } from './cbt.service';
 import { JwtAuthGuard, RolesGuard, Roles, TutorOnboardingGuard } from '../auth/guards/jwt-auth.guard';
@@ -13,19 +13,46 @@ export class CbtController {
     return this.cbtService.cbtLogin(regNumber, token, examId);
   }
 
+  /** Student CBT login anchored to an exam schedule (time-gated + schedule access code). */
+  @Post('login-schedule')
+  cbtLoginSchedule(
+    @Body('regNumber') regNumber: string,
+    @Body('token') token: string,
+    @Body('scheduleId') scheduleId: string,
+  ) {
+    return this.cbtService.cbtLoginSchedule(regNumber, token, scheduleId);
+  }
+
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard, TutorOnboardingGuard)
   @ApiBearerAuth()
   @Roles('TUTOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN')
-  findAll(@Query('tutorId') tutorId?: string, @Query('track') track?: string) {
+  findAll(
+    @Request() req: { user: { sub: string; role: string } },
+    @Query('tutorId') tutorId?: string,
+    @Query('track') track?: string,
+  ) {
+    // Tutors should only see their own exams by default.
+    if (req.user.role === 'TUTOR') {
+      return this.cbtService.findAll({ tutorUserId: req.user.sub, track: track as any });
+    }
     return this.cbtService.findAll({ tutorId, track: track as any });
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard, TutorOnboardingGuard)
+  @UseGuards(JwtAuthGuard, TutorOnboardingGuard, RolesGuard)
   @ApiBearerAuth()
-  findOne(@Param('id') id: string) {
-    return this.cbtService.findOne(id, false);
+  @Roles('TUTOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN')
+  findOne(
+    @Request() req: { user: { role: string } },
+    @Param('id') id: string,
+    @Query('includeAnswers') includeAnswers?: string,
+  ) {
+    const wantAnswers = String(includeAnswers || '').toLowerCase() === 'true';
+    if (wantAnswers && req.user.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only super admin can view answer keys');
+    }
+    return this.cbtService.findOne(id, wantAnswers);
   }
 
   @Post()
@@ -34,6 +61,15 @@ export class CbtController {
   @Roles('TUTOR')
   create(@Request() req, @Body() body: any) {
     return this.cbtService.createExam(req.user.sub, body);
+  }
+
+  /** Gemini: draft CBT questions from module curriculum (or multiple modules for term exams). */
+  @Post('generate-questions')
+  @UseGuards(JwtAuthGuard, RolesGuard, TutorOnboardingGuard)
+  @ApiBearerAuth()
+  @Roles('TUTOR', 'SUPER_ADMIN', 'CURRICULUM_LEAD')
+  generate(@Body() body: any) {
+    return this.cbtService.generateQuestions(body);
   }
 
   @Patch(':id/publish')
@@ -76,8 +112,8 @@ export class CbtController {
   @Get('attempts/:id/result')
   @UseGuards(JwtAuthGuard, TutorOnboardingGuard)
   @ApiBearerAuth()
-  getResult(@Param('id') id: string) {
-    return this.cbtService.getAttemptResult(id);
+  getResult(@Param('id') id: string, @Request() req: { user: { sub: string; role: string } }) {
+    return this.cbtService.getAttemptResult(id, req.user);
   }
 
   @Get(':id/attempts')
