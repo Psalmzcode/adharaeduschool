@@ -29,6 +29,13 @@ export class UsersController {
     return this.usersService.updateProfile(req.user.sub, body);
   }
 
+  @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('SUPER_ADMIN')
+  adminPatchUser(@Param('id') id: string, @Body() body: { email?: string }) {
+    return this.usersService.adminPatchUser(id, body);
+  }
+
   @Get(':id')
   @UseGuards(RolesGuard)
   @Roles('SUPER_ADMIN')

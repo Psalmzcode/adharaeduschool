@@ -93,6 +93,8 @@ enum TutorOnboardingStatus {
 /// Email one-time codes (passwordless sign-in, etc.)
 enum OtpPurpose {
   SIGN_IN
+  /// Verify inbox before creating school admin account (registration flow).
+  SCHOOL_REGISTRATION
 }
 
 enum TutorIdentificationType {

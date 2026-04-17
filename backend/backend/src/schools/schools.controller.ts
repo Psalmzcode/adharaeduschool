@@ -3,6 +3,7 @@ import {
   Get,
   Patch,
   Post,
+  Delete,
   Param,
   Body,
   Query,
@@ -85,5 +86,17 @@ export class SchoolsController {
     @Body('notes') notes?: string,
   ) {
     return this.schoolsService.updateStatus(id, status, notes);
+  }
+
+  @Post(':id/resend-pending-approval-email')
+  @Roles('SUPER_ADMIN')
+  resendPendingApprovalEmail(@Param('id') id: string) {
+    return this.schoolsService.resendPendingApprovalEmail(id);
+  }
+
+  @Delete(':id')
+  @Roles('SUPER_ADMIN')
+  deletePending(@Param('id') id: string) {
+    return this.schoolsService.deletePendingSchool(id);
   }
 }

@@ -3850,6 +3850,13 @@ export default function TutorDashboard() {
     return Array.from(byKey.values())
   }, [classes])
 
+  const tutorNavLabel = useMemo(() => {
+    const u = tutor?.user
+    if (!u) return undefined
+    const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim()
+    return name || undefined
+  }, [tutor?.user])
+
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--navy)' }}>
       <div style={{ textAlign: 'center' }}><div style={{ fontSize: 48, animation: 'float 2s ease-in-out infinite' }}>🎓</div><p style={{ color: 'var(--muted)', marginTop: 16 }}>Loading your portal…</p></div>
@@ -3938,7 +3945,10 @@ export default function TutorDashboard() {
   return (
     <DashboardShell role="tutor" title={titles[section] || 'Dashboard'}
       subtitle={section === 'tutor-dashboard' ? `${classes.map(c => c.school?.name).filter((v, i, a) => a.indexOf(v) === i).join(', ') || 'No schools assigned'} · Term 2, 2026` : undefined}
-      section={section} onSectionChange={setSection} navBadges={navBadges}>
+      section={section} onSectionChange={setSection} navBadges={navBadges}
+      topbarAvatarUrl={tutor?.passportPhotoUrl || tutor?.user?.avatarUrl || undefined}
+      navUserLabel={tutorNavLabel}
+      navUserRole="AdharaEdu Tutor">
       {render()}
     </DashboardShell>
   )

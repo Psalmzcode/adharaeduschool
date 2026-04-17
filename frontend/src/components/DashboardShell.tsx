@@ -7,6 +7,12 @@ interface Props {
   role: string; title: string; subtitle?: string; section: string
   onSectionChange: (s: string) => void; children: React.ReactNode; topbarRight?: React.ReactNode
   navBadges?: Record<string, string | number | null | undefined>
+  /** School logo (admin), tutor passport / user avatar, etc. Falls back to initials when missing or on load error. */
+  topbarAvatarUrl?: string | null
+  /** When set (non-empty after trim), replaces the demo name in `NAV[role].user` for sidebar + account menu. */
+  navUserLabel?: string | null
+  /** When set (non-empty after trim), replaces `NAV[role].userRole`. */
+  navUserRole?: string | null
 }
 
 const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;userRole:string}> = {
@@ -124,10 +130,11 @@ const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;u
   }
 }
 
-export function DashboardShell({ role, title, subtitle, section, onSectionChange, children, topbarRight, navBadges }: Props) {
+export function DashboardShell({ role, title, subtitle, section, onSectionChange, children, topbarRight, navBadges, topbarAvatarUrl, navUserLabel, navUserRole }: Props) {
   const [theme, setTheme] = useState<'dark'|'light'>('dark')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [topbarAvatarFailed, setTopbarAvatarFailed] = useState(false)
   const profileMenuRef = useRef<HTMLDivElement|null>(null)
   const router = useRouter()
   const nav = NAV[role] || NAV.superadmin
@@ -143,7 +150,27 @@ export function DashboardShell({ role, title, subtitle, section, onSectionChange
   }
 
   const logout = () => { localStorage.removeItem('adhara_token'); localStorage.removeItem('adhara_user'); router.push('/auth/login') }
-  const initials = nav?.user?.split(' ').map((w: string) => w[0]).join('').slice(0,2) || 'U'
+
+  const displayName =
+    typeof navUserLabel === 'string' && navUserLabel.trim() !== '' ? navUserLabel.trim() : nav?.user || 'Account'
+  const displayRole =
+    typeof navUserRole === 'string' && navUserRole.trim() !== '' ? navUserRole.trim() : nav?.userRole || ''
+
+  const initials =
+    displayName
+      .split(' ')
+      .filter(Boolean)
+      .map((w: string) => w[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || 'U'
+
+  const trimmedTopbarAvatar = typeof topbarAvatarUrl === 'string' ? topbarAvatarUrl.trim() : ''
+  const showTopbarImage = trimmedTopbarAvatar.length > 0 && !topbarAvatarFailed
+
+  useEffect(() => {
+    setTopbarAvatarFailed(false)
+  }, [topbarAvatarUrl])
 
   useEffect(() => {
     const onDocPointerDown = (event: MouseEvent) => {
@@ -190,6 +217,34 @@ export function DashboardShell({ role, title, subtitle, section, onSectionChange
             </div>
           ))}
         </nav>
+        <div className="sidebar-account">
+          <button
+            type="button"
+            className="sidebar-user"
+            onClick={() => {
+              setProfileMenuOpen((o) => !o)
+              setSidebarOpen(false)
+            }}
+            aria-expanded={profileMenuOpen}
+            aria-haspopup="menu"
+            title="Account menu"
+          >
+            {showTopbarImage ? (
+              <img
+                src={trimmedTopbarAvatar}
+                alt=""
+                className="sidebar-avatar-img"
+                onError={() => setTopbarAvatarFailed(true)}
+              />
+            ) : (
+              <div className="sidebar-avatar sidebar-avatar--sm">{initials}</div>
+            )}
+            <div className="sidebar-user-info">
+              <div className="sidebar-user-name">{displayName}</div>
+              <div className="sidebar-user-role">{displayRole}</div>
+            </div>
+          </button>
+        </div>
         <div className="sidebar-footer">
           <div className="sidebar-footer-actions">
             <button className="btn btn-ghost btn-sm sidebar-logout-btn" onClick={logout} title="Sign out">↪ Logout</button>
@@ -211,13 +266,22 @@ export function DashboardShell({ role, title, subtitle, section, onSectionChange
             <div className="topbar-icon-btn">🔍</div>
             <div className="topbar-profile-menu" ref={profileMenuRef}>
               <button className="topbar-profile-btn" onClick={()=>setProfileMenuOpen(!profileMenuOpen)} title="Account menu">
-                <div className="sidebar-avatar" style={{width:40,height:40,fontSize:14,cursor:'pointer'}}>{initials}</div>
+                {showTopbarImage ? (
+                  <img
+                    src={trimmedTopbarAvatar}
+                    alt=""
+                    className="topbar-avatar-img"
+                    onError={() => setTopbarAvatarFailed(true)}
+                  />
+                ) : (
+                  <div className="sidebar-avatar" style={{width:40,height:40,fontSize:14,cursor:'pointer'}}>{initials}</div>
+                )}
               </button>
               {profileMenuOpen && (
                 <div className="topbar-profile-dropdown">
                   <div className="topbar-profile-meta">
-                    <div className="topbar-profile-name">{nav?.user}</div>
-                    <div className="topbar-profile-role">{nav?.userRole}</div>
+                    <div className="topbar-profile-name">{displayName}</div>
+                    <div className="topbar-profile-role">{displayRole}</div>
                   </div>
                   <button className="topbar-profile-item danger" onClick={logout}>↪ Logout</button>
                 </div>

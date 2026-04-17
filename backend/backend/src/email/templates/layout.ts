@@ -80,6 +80,16 @@ export function emailDocument(opts: EmailLayoutOptions): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <title>AdharaEdu</title>
+  <style type="text/css">
+    /* CTA pills: kill browser/Gmail default blue underline on :link/:visited */
+    .adhara-cta a,
+    .adhara-cta a:link,
+    .adhara-cta a:visited,
+    .adhara-cta a:hover,
+    .adhara-cta a:active,
+    .adhara-cta a span,
+    .adhara-cta a font { text-decoration: none !important; border-bottom: none !important; }
+  </style>
   <!--[if mso]><style type="text/css">table { border-collapse: collapse; }</style><![endif]-->
 </head>
 <body style="margin:0;padding:0;background:${COLORS.bg};-webkit-font-smoothing:antialiased;">
@@ -150,23 +160,74 @@ export function separator(): string {
   return `<div style="height:1px;background:${COLORS.separator};margin:20px 0;"></div>`;
 }
 
-/** Pill primary CTA button. */
+/**
+ * Numbered step row — same gold badge as school-approved (soft fill + deep gold digit). No blue variant.
+ */
+export function numberedStepRow(n: number, text: string): string {
+  const circleBg = COLORS.goldSoft;
+  const circleColor = '#8B6914';
+  return `<tr>
+    <td style="padding:10px 0;vertical-align:top;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td style="width:36px;vertical-align:top;padding-top:1px;">
+            <span style="display:inline-block;min-width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:${circleBg};color:${circleColor};font-weight:800;font-size:12px;font-family:${EMAIL_FONT};">${n}</span>
+          </td>
+          <td style="font-size:15px;line-height:1.5;color:#3A3A3C;font-family:${EMAIL_FONT};padding-left:2px;">${escapeHtml(text)}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>`;
+}
+
+/** Inline styles to kill default link underline (Gmail/WebKit often ignore `a` alone). */
+const LINK_RESET =
+  'text-decoration:none !important;border-bottom:none !important;outline:none !important;';
+
+/**
+ * Primary CTA — centered pill (not full-bleed). Gold = header “Edu” (#D4A853).
+ * Gmail may still draw a blue underline on `<a href>`; reset on `a`, `font`, and inner `span`.
+ */
 export function ctaButton(href: string, label: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 20px;">
+  const safe = escapeHtml(label);
+  const bg = COLORS.gold;
+  return `<table role="presentation" class="adhara-cta" cellpadding="0" cellspacing="0" width="100%" style="margin:20px 0 8px;">
     <tr>
-      <td style="border-radius:14px;background:${COLORS.blue};">
-        <a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 28px;font-family:${EMAIL_FONT};font-size:16px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:14px;">${escapeHtml(label)}</a>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;border-radius:14px;background:${bg};border:1px solid #B8923F;">
+          <tr>
+            <td align="center" style="padding:14px 28px;border-radius:14px;mso-padding-alt:14px 28px;">
+              <a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;font-family:${EMAIL_FONT};${LINK_RESET}">
+                <font color="#FFFFFF" style="color:#FFFFFF;${LINK_RESET}">
+                  <span style="display:inline-block;color:#FFFFFF !important;-webkit-text-fill-color:#FFFFFF;${LINK_RESET}font-family:${EMAIL_FONT};font-size:16px;font-weight:700;line-height:1.35;letter-spacing:0.02em;">${safe}</span>
+                </font>
+              </a>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>
   </table>`;
 }
 
-/** Gold / secondary outline button. */
+/** Secondary CTA — same centered pill shape; soft gold fill + dark text. */
 export function ctaButtonGold(href: string, label: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 20px;">
+  const safe = escapeHtml(label);
+  const ink = '#5C4A1E';
+  return `<table role="presentation" class="adhara-cta" cellpadding="0" cellspacing="0" width="100%" style="margin:12px 0 8px;">
     <tr>
-      <td style="border-radius:14px;background:${COLORS.goldSoft};border:1px solid rgba(212,168,83,0.35);">
-        <a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 28px;font-family:${EMAIL_FONT};font-size:16px;font-weight:600;color:#6B5A2A;text-decoration:none;border-radius:14px;">${escapeHtml(label)}</a>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;border-radius:14px;background:${COLORS.goldSoft};border:1px solid rgba(212,168,83,0.45);">
+          <tr>
+            <td align="center" style="padding:14px 28px;border-radius:14px;mso-padding-alt:14px 28px;">
+              <a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;font-family:${EMAIL_FONT};${LINK_RESET}">
+                <font color="${ink}" style="color:${ink};${LINK_RESET}">
+                  <span style="display:inline-block;color:${ink} !important;${LINK_RESET}font-family:${EMAIL_FONT};font-size:16px;font-weight:600;line-height:1.35;">${safe}</span>
+                </font>
+              </a>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>
   </table>`;

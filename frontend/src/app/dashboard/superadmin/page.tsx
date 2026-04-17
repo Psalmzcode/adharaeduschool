@@ -1,10 +1,10 @@
 'use client'
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { useState, useEffect, useRef, Suspense, type ReactNode } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
 import { ClassPerformancePanel } from '@/components/ClassPerformancePanel'
-import { schoolsApi, tutorsApi, paymentsApi, reportsApi, cbtApi, payrollApi, tracksApi, practicalsApi, modulesApi, schoolClassesApi, curriculumApi } from '@/lib/api'
+import { schoolsApi, tutorsApi, paymentsApi, reportsApi, cbtApi, payrollApi, tracksApi, practicalsApi, modulesApi, schoolClassesApi, curriculumApi, usersApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { SACertificates } from './extras'
 
@@ -194,21 +194,319 @@ function SAOverview({ onSection }: { onSection: (s: string) => void }) {
   </>)
 }
 
+function SchoolDetailRow({ label, value }: { label: string; value: ReactNode }) {
+  if (value === null || value === undefined || value === '') return null
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4, fontFamily: 'var(--font-display)' }}>{label}</div>
+      <div style={{ fontSize: 14, color: 'var(--white)', lineHeight: 1.5 }}>{value}</div>
+    </div>
+  )
+}
+
 function SASchools() {
   const { data: schools, loading, setData } = useData(['sa', 'schools'], () => schoolsApi.all(), [])
   const [filter, setFilter] = useState('ALL')
+  const [editSchool, setEditSchool] = useState<any>(null)
+  const [editEmail, setEditEmail] = useState('')
+  const [savingEmail, setSavingEmail] = useState(false)
+  const [removeSchool, setRemoveSchool] = useState<any>(null)
+  const [removing, setRemoving] = useState(false)
+  const [viewOpen, setViewOpen] = useState(false)
+  const [viewLoading, setViewLoading] = useState(false)
+  const [viewDetail, setViewDetail] = useState<any>(null)
+  const [pendingStatus, setPendingStatus] = useState<{ school: any; next: 'APPROVED' | 'REJECTED'; fromView?: boolean } | null>(null)
+  const [statusConfirmBusy, setStatusConfirmBusy] = useState(false)
+  const [pendingResend, setPendingResend] = useState<any>(null)
+  const [resendBusy, setResendBusy] = useState(false)
+  const [pendingEmailSave, setPendingEmailSave] = useState(false)
   const schoolArr = Array.isArray(schools) ? schools : []
   const filtered = filter === 'ALL' ? schoolArr : schoolArr.filter((s: any) => s.status === filter)
 
-  const approve = async (id: string) => {
-    try { await schoolsApi.updateStatus(id, 'APPROVED'); setData(schoolArr.map((s: any) => s.id === id ? { ...s, status: 'APPROVED' } : s)) } catch (e: any) { notify.fromError(e) }
+  const confirmStatusChange = async () => {
+    if (!pendingStatus) return
+    setStatusConfirmBusy(true)
+    try {
+      const { school, next, fromView } = pendingStatus
+      await schoolsApi.updateStatus(school.id, next)
+      setData(schoolArr.map((s: any) => (s.id === school.id ? { ...s, status: next } : s)))
+      notify.success(next === 'APPROVED' ? 'School approved.' : 'School rejected.')
+      setPendingStatus(null)
+      if (fromView) closeViewSchool()
+    } catch (e: any) {
+      notify.fromError(e)
+    } finally {
+      setStatusConfirmBusy(false)
+    }
   }
-  const reject = async (id: string) => {
-    try { await schoolsApi.updateStatus(id, 'REJECTED'); setData(schoolArr.map((s: any) => s.id === id ? { ...s, status: 'REJECTED' } : s)) } catch (e: any) { notify.fromError(e) }
+
+  const confirmResend = async () => {
+    if (!pendingResend?.id) return
+    setResendBusy(true)
+    try {
+      await schoolsApi.resendPendingApprovalEmail(pendingResend.id)
+      notify.success('Pending-approval email sent to the school admin.')
+      setPendingResend(null)
+    } catch (e: any) {
+      notify.fromError(e)
+    } finally {
+      setResendBusy(false)
+    }
+  }
+
+  const openEditEmail = (s: any) => {
+    const em = s.admins?.[0]?.email || ''
+    setEditSchool(s)
+    setEditEmail(em)
+  }
+
+  const requestSaveAdminEmail = () => {
+    const adminId = editSchool?.admins?.[0]?.id
+    if (!adminId || !editEmail.trim()) {
+      notify.warning('Enter a valid email.')
+      return
+    }
+    setPendingEmailSave(true)
+  }
+
+  const saveAdminEmail = async () => {
+    const adminId = editSchool?.admins?.[0]?.id
+    if (!adminId || !editEmail.trim()) {
+      notify.warning('Enter a valid email.')
+      return
+    }
+    setSavingEmail(true)
+    try {
+      await usersApi.adminPatch(adminId, { email: editEmail.trim().toLowerCase() })
+      setData(
+        schoolArr.map((s: any) =>
+          s.id === editSchool.id
+            ? {
+                ...s,
+                admins: (s.admins || []).map((a: any, i: number) =>
+                  i === 0 ? { ...a, email: editEmail.trim().toLowerCase() } : a,
+                ),
+              }
+            : s,
+        ),
+      )
+      notify.success('Admin email updated.')
+      setEditSchool(null)
+    } catch (e: any) {
+      notify.fromError(e)
+    } finally {
+      setSavingEmail(false)
+    }
+  }
+
+  const confirmSaveAdminEmail = async () => {
+    try {
+      await saveAdminEmail()
+    } finally {
+      setPendingEmailSave(false)
+    }
+  }
+
+  const confirmRemove = async () => {
+    if (!removeSchool?.id) return
+    setRemoving(true)
+    try {
+      await schoolsApi.remove(removeSchool.id)
+      setData(schoolArr.filter((s: any) => s.id !== removeSchool.id))
+      notify.success('Pending school removed.')
+      setRemoveSchool(null)
+    } catch (e: any) {
+      notify.fromError(e)
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  const openViewSchool = async (s: any) => {
+    setViewOpen(true)
+    setViewDetail(null)
+    setViewLoading(true)
+    try {
+      const d = await schoolsApi.one(s.id)
+      setViewDetail(d)
+    } catch (e: any) {
+      notify.fromError(e, 'Could not load school details.')
+      setViewOpen(false)
+    } finally {
+      setViewLoading(false)
+    }
+  }
+
+  const closeViewSchool = () => {
+    setViewOpen(false)
+    setViewDetail(null)
+    setViewLoading(false)
+  }
+
+  const fmtDate = (d: string | undefined) => {
+    if (!d) return ''
+    try {
+      return new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    } catch {
+      return String(d)
+    }
   }
 
   return (
     <div>
+      <Modal open={viewOpen} onClose={closeViewSchool} title={viewDetail?.name || 'School details'}>
+        <div style={{ minHeight: viewLoading ? 120 : undefined }}>
+          {viewLoading && <p className="text-muted text-sm" style={{ padding: '12px 0' }}>Loading details…</p>}
+          {!viewLoading && viewDetail && (
+            <div style={{ display: 'grid', gap: 4 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+                <span className={`badge badge-${viewDetail.status === 'APPROVED' ? 'success' : viewDetail.status === 'PENDING' ? 'warning' : 'danger'}`}>{viewDetail.status}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--muted)' }}>{viewDetail.code}</span>
+              </div>
+              <SchoolDetailRow label="Address" value={viewDetail.address} />
+              <SchoolDetailRow label="State / LGA" value={[viewDetail.state, viewDetail.lga].filter(Boolean).join(' · ') || undefined} />
+              <SchoolDetailRow label="Lead contact" value={viewDetail.principalName} />
+              <SchoolDetailRow label="Principal phone" value={viewDetail.principalPhone} />
+              <SchoolDetailRow label="Registered" value={fmtDate(viewDetail.createdAt)} />
+              <SchoolDetailRow label="Student count (band)" value={viewDetail.studentCountBand} />
+              {viewDetail.admins?.length > 0 && (
+                <div style={{ marginTop: 8, paddingTop: 14, borderTop: '1px solid var(--border2)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gold)', marginBottom: 10, fontFamily: 'var(--font-display)' }}>School admin (registration)</div>
+                  {viewDetail.admins.map((a: any) => (
+                    <div key={a.id} style={{ marginBottom: 12, padding: '10px 12px', background: 'var(--muted3)', borderRadius: 8, border: '1px solid var(--border2)' }}>
+                      <div style={{ fontWeight: 600, color: 'var(--white)' }}>{[a.firstName, a.lastName].filter(Boolean).join(' ') || '—'}</div>
+                      <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>📧 {a.email || '—'}</div>
+                      {a.phone && <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>📞 {a.phone}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <SchoolDetailRow label="Internal notes" value={viewDetail.notes} />
+              {Array.isArray(viewDetail.tutorAssignments) && viewDetail.tutorAssignments.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Active tutor assignments</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--white)', fontSize: 13 }}>
+                    {viewDetail.tutorAssignments.map((ta: any) => (
+                      <li key={ta.id}>
+                        {ta.tutor?.user ? `${ta.tutor.user.firstName} ${ta.tutor.user.lastName}`.trim() : 'Tutor'} ({ta.tutor?.user?.email || '—'})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                Students in system: <strong style={{ color: 'var(--white)' }}>{viewDetail._count?.students ?? 0}</strong>
+              </div>
+              {viewDetail.status === 'PENDING' && (
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border2)' }}>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => setPendingStatus({ school: viewDetail, next: 'APPROVED', fromView: true })}>
+                    Approve school
+                  </button>
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => setPendingStatus({ school: viewDetail, next: 'REJECTED', fromView: true })}>
+                    Reject
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Modal>
+      <Modal open={!!editSchool} onClose={() => !savingEmail && setEditSchool(null)} title="Update school admin email">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <p className="text-muted text-sm" style={{ lineHeight: 1.55 }}>
+            Change the email for <strong style={{ color: 'var(--white)' }}>{editSchool?.name}</strong>. Use &quot;Resend pending email&quot; after saving so they get the notice at the new address.
+          </p>
+          <div className="form-group">
+            <label>Admin email</label>
+            <input
+              className="form-input"
+              type="email"
+              value={editEmail}
+              onChange={(e) => setEditEmail(e.target.value)}
+              autoComplete="email"
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditSchool(null)} disabled={savingEmail}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={requestSaveAdminEmail} disabled={savingEmail} style={{ minWidth: 120 }}>
+              {savingEmail ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+      <ConfirmModal
+        open={!!pendingStatus}
+        title={pendingStatus?.next === 'APPROVED' ? 'Approve school' : 'Reject school'}
+        message={
+          pendingStatus ? (
+            <>
+              {pendingStatus.next === 'APPROVED' ? 'Approve' : 'Reject'}{' '}
+              <strong style={{ color: 'var(--white)' }}>{pendingStatus.school?.name}</strong>
+              {pendingStatus.next === 'APPROVED'
+                ? '? The school admin will be notified and can use the full dashboard after onboarding.'
+                : '? The school will be marked rejected; you can explain next steps with the admin separately.'}
+            </>
+          ) : null
+        }
+        confirmText={pendingStatus?.next === 'APPROVED' ? 'Approve' : 'Reject'}
+        danger={pendingStatus?.next === 'REJECTED'}
+        busy={statusConfirmBusy}
+        onConfirm={confirmStatusChange}
+        onClose={() => !statusConfirmBusy && setPendingStatus(null)}
+      />
+      <ConfirmModal
+        open={!!pendingResend}
+        title="Resend pending-approval email"
+        message={
+          <>
+            Send the pending-approval email again for <strong style={{ color: 'var(--white)' }}>{pendingResend?.name}</strong>
+            {pendingResend?.admins?.[0]?.email ? (
+              <>
+                {' '}
+                to <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{pendingResend.admins[0].email}</span>
+              </>
+            ) : null}
+            ?
+          </>
+        }
+        confirmText="Send email"
+        busy={resendBusy}
+        onConfirm={confirmResend}
+        onClose={() => !resendBusy && setPendingResend(null)}
+      />
+      <ConfirmModal
+        open={pendingEmailSave}
+        title="Save admin email"
+        message={
+          <>
+            Update the school admin email to{' '}
+            <strong style={{ color: 'var(--white)', fontFamily: 'var(--font-mono)', fontSize: 13 }}>{editEmail.trim()}</strong>?
+            <span className="text-muted text-sm" style={{ display: 'block', marginTop: 10, lineHeight: 1.5 }}>
+              Use &quot;Resend&quot; afterward so the admin receives the pending notice at the new address.
+            </span>
+          </>
+        }
+        confirmText="Save email"
+        busy={savingEmail}
+        onConfirm={confirmSaveAdminEmail}
+        onClose={() => !savingEmail && setPendingEmailSave(false)}
+      />
+      <ConfirmModal
+        open={!!removeSchool}
+        title="Remove pending school"
+        message={
+          <>
+            Permanently remove <strong style={{ color: 'var(--white)' }}>{removeSchool?.name}</strong>? This only works for pending schools with no students. If removal fails, use Reject instead.
+          </>
+        }
+        confirmText="Remove"
+        danger
+        busy={removing}
+        onConfirm={confirmRemove}
+        onClose={() => !removing && setRemoveSchool(null)}
+      />
       <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Registered Schools</h3><div className="text-muted text-sm">{schoolArr.length} schools total</div></div></div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {['ALL', 'APPROVED', 'PENDING', 'REJECTED'].map(f => (
@@ -229,9 +527,37 @@ function SASchools() {
                   <td>{s.state}</td>
                   <td>{s._count?.students || 0}</td>
                   <td><span className={`badge badge-${s.status === 'APPROVED' ? 'success' : s.status === 'PENDING' ? 'warning' : 'danger'}`}>{s.status}</span></td>
-                  <td style={{ display: 'flex', gap: 6 }}>
-                    {s.status === 'PENDING' && <><button onClick={() => approve(s.id)} className="btn btn-primary btn-sm" style={{ fontSize: 10 }}>Approve</button><button onClick={() => reject(s.id)} className="btn btn-danger btn-sm" style={{ fontSize: 10 }}>Reject</button></>}
-                    <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}>View</button>
+                  <td style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {s.status === 'PENDING' && (
+                      <>
+                        <button type="button" onClick={() => setPendingStatus({ school: s, next: 'APPROVED' })} className="btn btn-primary btn-sm" style={{ fontSize: 10 }}>
+                          Approve
+                        </button>
+                        <button type="button" onClick={() => setPendingStatus({ school: s, next: 'REJECTED' })} className="btn btn-danger btn-sm" style={{ fontSize: 10 }}>
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPendingResend(s)}
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10 }}
+                          title="Resend pending-approval email to the admin"
+                        >
+                          Resend
+                        </button>
+                        <button type="button" onClick={() => openEditEmail(s)} className="btn btn-ghost btn-sm" style={{ fontSize: 10 }} title="Update admin email">
+                          Email
+                        </button>
+                        {(s._count?.students || 0) === 0 && (
+                          <button type="button" onClick={() => setRemoveSchool(s)} className="btn btn-ghost btn-sm" style={{ fontSize: 10, color: '#F87171' }} title="Remove pending application">
+                            Remove
+                          </button>
+                        )}
+                      </>
+                    )}
+                    <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => openViewSchool(s)} title="View registration details">
+                      View
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -274,7 +600,7 @@ function SAApprovals() {
                   <span className="badge badge-warning">PENDING</span>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 16 }}>
-                  {[['Principal', s.principalName], ['Phone', s.principalPhone], ['Address', s.address]].filter(([, v]) => v).map(([l, v]) => (
+                  {[['Lead contact', s.principalName], ['Phone', s.principalPhone], ['Address', s.address]].filter(([, v]) => v).map(([l, v]) => (
                     <div key={l}><div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 3, fontFamily: 'var(--font-display)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{l}</div><div style={{ fontSize: 13, color: 'var(--white)' }}>{v}</div></div>
                   ))}
                 </div>
@@ -2214,6 +2540,8 @@ function SuperAdminDashboardInner() {
   const searchParams = useSearchParams()
   const [section, setSection] = useState('overview')
   const [loading, setLoading] = useState(true)
+  const [topbarAvatarUrl, setTopbarAvatarUrl] = useState<string | undefined>()
+  const [superAdminNavLabel, setSuperAdminNavLabel] = useState<string | undefined>()
   const { data: sidebarSchools } = useData(['sa', 'sidebar-schools'], () => schoolsApi.all(), [])
   const { data: sidebarTutors } = useData(['sa', 'sidebar-tutors'], () => tutorsApi.all(), [])
   const { data: sidebarReports } = useData(['sa', 'sidebar-reports'], () => reportsApi.all(), [])
@@ -2241,6 +2569,13 @@ function SuperAdminDashboardInner() {
   useEffect(() => {
     if (!localStorage.getItem('adhara_token')) { router.push('/auth/login'); return }
     setLoading(false)
+    try {
+      const u = JSON.parse(localStorage.getItem('adhara_user') || '{}')
+      const a = typeof u?.avatarUrl === 'string' ? u.avatarUrl.trim() : ''
+      if (a) setTopbarAvatarUrl(a)
+      const nm = [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim()
+      if (nm) setSuperAdminNavLabel(nm)
+    } catch { /* ignore */ }
   }, [])
 
   useEffect(() => {
@@ -2284,7 +2619,10 @@ function SuperAdminDashboardInner() {
   return (
     <DashboardShell role="superadmin" title={titles[section] || 'Overview'}
       subtitle={section === 'overview' ? 'AdharaEdu Platform · Super Admin View' : undefined}
-      section={section} onSectionChange={setSection} navBadges={sidebarBadges}>
+      section={section} onSectionChange={setSection} navBadges={sidebarBadges}
+      topbarAvatarUrl={topbarAvatarUrl}
+      navUserLabel={superAdminNavLabel}
+      navUserRole="Platform Administrator">
       {render()}
     </DashboardShell>
   )

@@ -94,7 +94,6 @@ export function MarketingNav() {
 
       <div className={`mobile-menu${mobileOpen ? ' open' : ''}`} style={{ display: mobileOpen ? 'flex' : 'none' }}>
         <div className="mobile-menu-header">
-          <LogoLink />
           <button type="button" className="mobile-menu-close" onClick={() => setMobileOpen(false)} aria-label="Close menu">
             ✕
           </button>
@@ -117,6 +116,14 @@ export function MarketingNav() {
           </Link>
         </div>
         <div className="mobile-menu-actions">
+          <button
+            type="button"
+            onClick={() => toggle()}
+            className="btn btn-ghost btn-lg mobile-menu-theme-btn"
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          >
+            {theme === 'dark' ? '☀️ Light mode' : '🌙 Dark mode'}
+          </button>
           <Link href="/auth/register" className="btn btn-primary btn-lg" onClick={() => setMobileOpen(false)}>
             Get Started →
           </Link>

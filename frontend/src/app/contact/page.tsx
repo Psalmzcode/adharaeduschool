@@ -45,10 +45,8 @@ export default function ContactPage() {
 
       <div className="contact-wrapper">
         <div className="contact-left">
-          <div className="section-eyebrow">// reach out</div>
-          <h1>
-            Let&apos;s Start a <em>Conversation</em>
-          </h1>
+          <div className="section-eyebrow">// contact us</div>
+          <h1>Contact Us</h1>
           <p>
             Whether you&apos;re a school administrator ready to partner, a parent with questions, or someone who wants to join our mission — we&apos;re here.
           </p>
@@ -61,21 +59,21 @@ export default function ContactPage() {
                 <div className="method-value">info@adharaedu.com</div>
               </div>
             </a>
-            <a className="contact-method" href="tel:+2348000000000">
+            <a className="contact-method" href="tel:+2348160486223">
               <div className="method-icon">📞</div>
               <div className="method-info">
-                <div className="method-label">Call us</div>
-                <div className="method-value">+234 800 000 0000</div>
+                <div className="method-label">Contact us</div>
+                <div className="method-value">0816 048 6223</div>
               </div>
             </a>
             <div className="contact-method">
               <div className="method-icon">📍</div>
               <div className="method-info">
-                <div className="method-label">Office</div>
-                <div className="method-value">Lagos, Nigeria</div>
+                <div className="method-label">Address</div>
+                <div className="method-value">Enugu, Nigeria</div>
               </div>
             </div>
-            <a className="contact-method" href="https://wa.me/2348000000000" target="_blank" rel="noopener noreferrer">
+            <a className="contact-method" href="https://wa.me/2348160486223" target="_blank" rel="noopener noreferrer">
               <div className="method-icon">💬</div>
               <div className="method-info">
                 <div className="method-label">WhatsApp</div>

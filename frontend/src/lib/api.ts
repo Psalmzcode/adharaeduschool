@@ -46,10 +46,20 @@ async function upload(path: string, file: File, extra?: Record<string, string>):
 
 // ─── AUTH ───────────────────────────────────────────────────
 export const authApi = {
+  /** DNS-based domain check before registration (same rules as POST /auth/register). */
+  validateEmail: (email: string) =>
+    req('POST', '/auth/validate-email', { email }) as Promise<{ ok: boolean; message?: string }>,
   login: (login: string, password: string) =>
     req('POST', '/auth/login', { login, password }),
   /** Passwordless: sends 6-digit code if an active account exists for this email. */
-  requestOtp: (email: string) => req('POST', '/auth/otp/send', { email }),
+  requestOtp: (email: string, purpose?: 'SIGN_IN' | 'SCHOOL_REGISTRATION') =>
+    req('POST', '/auth/otp/send', purpose ? { email, purpose } : { email }),
+  /** School signup — sends OTP to prove inbox before POST /auth/register. */
+  verifyRegistrationOtp: (email: string, code: string) =>
+    req('POST', '/auth/otp/verify-registration', { email, code }) as Promise<{
+      registrationToken: string
+      email: string
+    }>,
   /** Passwordless: verify code — returns `{ user, token }` like login. */
   verifyOtp: (email: string, code: string) =>
     req('POST', '/auth/otp/verify', { email, code }),
@@ -76,6 +86,11 @@ export const schoolsApi = {
     req('POST', '/schools/my-school/complete-profile', data),
   updateStatus: (id: string, status: string, notes?: string) =>
     req('PATCH', `/schools/${id}/status`, { status, notes }),
+  /** Super Admin — after correcting admin email, resend “pending approval” (school must still be PENDING). */
+  resendPendingApprovalEmail: (schoolId: string) =>
+    req('POST', `/schools/${schoolId}/resend-pending-approval-email`, {}),
+  /** Super Admin — pending school with no students (may fail if related rows exist). */
+  remove: (schoolId: string) => req('DELETE', `/schools/${schoolId}`),
 }
 
 // ─── SCHOOL CLASSES ──────────────────────────────────────────
@@ -387,6 +402,8 @@ export const uploadsApi = {
 // ─── USERS ──────────────────────────────────────────────────
 export const usersApi = {
   updateProfile: (data: any) => req('PATCH', '/users/me', data),
+  /** Super Admin — change login / notification email (e.g. typo on school signup). */
+  adminPatch: (userId: string, data: { email: string }) => req('PATCH', `/users/${userId}`, data),
 }
 
 // ─── SESSIONS (lesson logging) ───────────────────────────────

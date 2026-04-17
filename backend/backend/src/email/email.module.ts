@@ -1,6 +1,11 @@
 import { Module, Global } from '@nestjs/common';
 import { EmailService } from './email.service';
+import { EmailPreviewController } from './email-preview.controller';
 
 @Global()
-@Module({ providers: [EmailService], exports: [EmailService] })
+@Module({
+  controllers: [EmailPreviewController],
+  providers: [EmailService],
+  exports: [EmailService],
+})
 export class EmailModule {}

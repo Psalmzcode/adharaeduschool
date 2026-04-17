@@ -17,6 +17,7 @@ import {
   emailDocument,
   escapeHtml,
   labelCaps,
+  numberedStepRow,
   paragraph,
   paragraphHtml,
   separator,
@@ -240,9 +241,9 @@ export function templateSchoolApproved(data: {
     ${titleH1(`You’re live, ${data.adminName}`)}
     ${paragraphHtml(`<strong style="color:${COLORS.text};">${escapeHtml(data.schoolName)}</strong> is approved on AdharaEdu.`)}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;">
-      <tr><td style="padding:14px 0;border-bottom:1px solid ${COLORS.separator};"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:${COLORS.goldSoft};color:#8B6914;font-weight:800;font-size:12px;">1</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">Complete your school profile in the admin portal.</span></td></tr>
-      <tr><td style="padding:14px 0;border-bottom:1px solid ${COLORS.separator};"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:${COLORS.goldSoft};color:#8B6914;font-weight:800;font-size:12px;">2</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">Add students — individually or via CSV.</span></td></tr>
-      <tr><td style="padding:14px 0;"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:${COLORS.goldSoft};color:#8B6914;font-weight:800;font-size:12px;">3</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">Your tutor will reach out to schedule the first session.</span></td></tr>
+      ${numberedStepRow(1, 'Complete your school profile in the admin portal.')}
+      ${numberedStepRow(2, 'Add students — individually or via CSV.')}
+      ${numberedStepRow(3, 'Your tutor will reach out to schedule the first session.')}
     </table>
     ${ctaButton(`${data.loginUrl.replace(/\/$/, '')}/dashboard/admin`, 'Open admin dashboard')}
   `;
@@ -262,9 +263,9 @@ export function templateSchoolPendingApproval(data: {
       `Your school <strong style="color:${COLORS.text};">${escapeHtml(data.schoolName)}</strong> has been created on AdharaEdu and is awaiting approval.`,
     )}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;">
-      <tr><td style="padding:14px 0;border-bottom:1px solid ${COLORS.separator};"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:${COLORS.blueSoft};color:${COLORS.blue};font-weight:800;font-size:12px;">1</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">We’re reviewing your details for approval.</span></td></tr>
-      <tr><td style="padding:14px 0;border-bottom:1px solid ${COLORS.separator};"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:${COLORS.blueSoft};color:${COLORS.blue};font-weight:800;font-size:12px;">2</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">You’ll receive an email once approved.</span></td></tr>
-      <tr><td style="padding:14px 0;"><span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:${COLORS.blueSoft};color:${COLORS.blue};font-weight:800;font-size:12px;">3</span> <span style="margin-left:8px;font-size:15px;color:#3A3A3C;">After approval, you can sign in and complete your school profile (onboarding).</span></td></tr>
+      ${numberedStepRow(1, 'We’re reviewing your details for approval.')}
+      ${numberedStepRow(2, 'You’ll receive an email once approved.')}
+      ${numberedStepRow(3, 'After approval, you can sign in and complete your school profile (onboarding).')}
     </table>
     ${paragraph(
       data.supportEmail
@@ -391,15 +392,9 @@ export function templateTutorWelcome(data: {
     </table>
     <p style="margin:0 0 12px;font-size:15px;font-weight:600;color:${COLORS.text};">Next steps</p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
-      <tr><td style="padding:10px 0;border-bottom:1px solid ${COLORS.separator};font-size:15px;color:#3A3A3C;">
-        <span style="display:inline-block;min-width:22px;font-weight:800;color:${COLORS.blue};">1</span> Sign in and change your password if prompted.
-      </td></tr>
-      <tr><td style="padding:10px 0;border-bottom:1px solid ${COLORS.separator};font-size:15px;color:#3A3A3C;">
-        <span style="display:inline-block;min-width:22px;font-weight:800;color:${COLORS.blue};">2</span> Open onboarding and fill your profile (bio, tracks, bank details as required).
-      </td></tr>
-      <tr><td style="padding:10px 0;font-size:15px;color:#3A3A3C;">
-        <span style="display:inline-block;min-width:22px;font-weight:800;color:${COLORS.blue};">3</span> Upload KYC: ID, passport-style photo, signature, and guarantors as requested.
-      </td></tr>
+      ${numberedStepRow(1, 'Sign in and change your password if prompted.')}
+      ${numberedStepRow(2, 'Open onboarding and fill your profile (bio, tracks, bank details as required).')}
+      ${numberedStepRow(3, 'Upload KYC: ID, passport-style photo, signature, and guarantors as requested.')}
     </table>
     ${paragraph('Once your onboarding is complete and verified, our team can assign you to a school.', { muted: true })}
     ${ctaButton(data.onboardingUrl.replace(/\/$/, ''), 'Complete onboarding')}

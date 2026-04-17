@@ -16,4 +16,10 @@ export class RegisterDto {
   @ApiPropertyOptional() @IsOptional() @IsString() address?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() state?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() lga?: string;
+  /** Shown on super admin review — e.g. Principal, VP Academics (from registration form). */
+  @ApiPropertyOptional() @IsOptional() @IsString() leadContactTitle?: string;
+  /** Estimated student band from registration — maps to School.studentCountBand. */
+  @ApiPropertyOptional() @IsOptional() @IsString() studentCountBand?: string;
+  /** From POST /auth/otp/verify-registration — proves inbox ownership before account creation. */
+  @ApiPropertyOptional() @IsOptional() @IsString() registrationToken?: string;
 }

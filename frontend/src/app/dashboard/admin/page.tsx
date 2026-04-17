@@ -1725,6 +1725,16 @@ function AdminDashboardInner() {
     tutors: !school?.id || loadingTutors ? null : assignedTutors.length,
   }
 
+  const adminShellSubtitle =
+    school?.name
+      ? (() => {
+          const y = String(school.academicYearLabel || '').trim()
+          const t = String(school.currentTermLabel || '').trim()
+          const term = [y, t].filter(Boolean).join(' ').trim()
+          return term ? `${school.name} · ${term}` : school.name
+        })()
+      : undefined
+
   const renderSection = () => {
     switch(section) {
       case 'students': return <StudentsSection school={school} selectedClass={selectedClass} onClearClass={()=>setSelectedClass(null)} onBackToClasses={()=>setSection('classes')}/>
@@ -1829,8 +1839,11 @@ function AdminDashboardInner() {
   }
 
   return (
-    <DashboardShell role="admin" title={titles[section]||'Dashboard'} subtitle="Crown Heights Secondary School · Term 2, 2026" section={section} onSectionChange={setSection}
+    <DashboardShell role="admin" title={titles[section]||'Dashboard'} subtitle={adminShellSubtitle} section={section} onSectionChange={setSection}
       navBadges={navBadges}
+      topbarAvatarUrl={school?.logoUrl || undefined}
+      navUserLabel={school?.name || undefined}
+      navUserRole="School Admin"
       topbarRight={
         section === 'school-profile' ? (
           <Link href="/dashboard/admin/complete-school-profile" className="btn btn-primary btn-sm">

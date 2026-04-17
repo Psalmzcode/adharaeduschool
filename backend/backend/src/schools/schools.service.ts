@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SchoolStatus, Role } from '@prisma/client';
@@ -189,6 +190,73 @@ export class SchoolsService {
       }
     }
     return updated;
+  }
+
+  /** Super admin — resend “pending approval” email after fixing the admin’s email in the database. */
+  async resendPendingApprovalEmail(schoolId: string) {
+    const school = await this.prisma.school.findUnique({
+      where: { id: schoolId },
+      include: {
+        admins: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+          take: 1,
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+    if (!school) throw new NotFoundException('School not found');
+    if (school.status !== SchoolStatus.PENDING) {
+      throw new BadRequestException('This school is not pending approval; no pending-approval email is sent.');
+    }
+    const admin = school.admins[0];
+    if (!admin?.email?.trim()) {
+      throw new BadRequestException('School admin has no email on file.');
+    }
+    const supportEmail =
+      this.config.get<string>('SUPPORT_EMAIL') ||
+      this.config.get<string>('EMAIL_FROM') ||
+      undefined;
+    await this.emailService.sendSchoolPendingApproval({
+      email: admin.email.trim(),
+      schoolName: school.name,
+      adminName: `${admin.firstName} ${admin.lastName}`.trim(),
+      supportEmail,
+    });
+    return { sent: true, to: admin.email.trim() };
+  }
+
+  /**
+   * Super admin — remove a **pending** school that has no students and minimal related data.
+   * Fails if foreign keys still reference the school (use Reject instead).
+   */
+  async deletePendingSchool(id: string) {
+    const school = await this.prisma.school.findUnique({
+      where: { id },
+      include: {
+        _count: { select: { students: true } },
+      },
+    });
+    if (!school) throw new NotFoundException('School not found');
+    if (school.status !== SchoolStatus.PENDING) {
+      throw new BadRequestException('Only pending applications can be removed this way.');
+    }
+    if (school._count.students > 0) {
+      throw new BadRequestException('Cannot delete a school that already has students.');
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.tutorAssignment.deleteMany({ where: { schoolId: id } });
+        await tx.user.updateMany({ where: { schoolId: id }, data: { schoolId: null } });
+        await tx.school.delete({ where: { id } });
+      });
+    } catch {
+      throw new BadRequestException(
+        'Could not remove this school (related records exist). Reject the application instead.',
+      );
+    }
+
+    return { deleted: true, id };
   }
 
   // Dashboard stats for school admin

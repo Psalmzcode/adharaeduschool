@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
@@ -1413,6 +1413,35 @@ export default function StudentDashboard() {
     setExamPopup({ open: true, schedule: next })
   }, [isParent, student?.id, examsArr.length])
 
+  const shellIdentity = useMemo(() => {
+    if (!student) return { label: undefined as string | undefined, role: undefined as string | undefined }
+    if (isParent) {
+      let label: string | undefined
+      try {
+        const u = JSON.parse(typeof window !== 'undefined' ? localStorage.getItem('adhara_user') || '{}' : '{}')
+        const n = [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim()
+        if (n) label = n
+      } catch {
+        /* ignore */
+      }
+      if (!label) {
+        const pu = (student as { parent?: { user?: { firstName?: string; lastName?: string } } }).parent?.user
+        if (pu) label = [pu.firstName, pu.lastName].filter(Boolean).join(' ').trim() || undefined
+      }
+      const childFirst = student.user?.firstName || 'Student'
+      return { label, role: `Parent · ${childFirst}` }
+    }
+    const label = [student.user?.firstName, student.user?.lastName].filter(Boolean).join(' ').trim() || undefined
+    const tr = formatTrack(student.track)
+    const role =
+      student.className && tr
+        ? `Student · ${student.className} · ${tr}`
+        : tr
+          ? `Student · ${tr}`
+          : 'Student'
+    return { label, role }
+  }, [student, isParent])
+
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--navy)' }}>
       <div style={{ textAlign: 'center' }}><div style={{ fontSize: 48, animation: 'float 2s ease-in-out infinite' }}>📚</div><p style={{ color: 'var(--muted)', marginTop: 16 }}>Loading your portal…</p></div>
@@ -1441,7 +1470,10 @@ export default function StudentDashboard() {
   return (
     <DashboardShell role={isParent ? 'parent' : 'student'} title={titles[section] || 'Dashboard'}
       subtitle={section === 'student-dashboard' ? `${student?.user?.firstName} ${student?.user?.lastName} · ${student?.regNumber} · ${student?.track?.replace('TRACK_', 'Track ')}` : undefined}
-      section={section} onSectionChange={setSection} navBadges={navBadges}>
+      section={section} onSectionChange={setSection} navBadges={navBadges}
+      topbarAvatarUrl={student?.user?.avatarUrl || undefined}
+      navUserLabel={shellIdentity.label}
+      navUserRole={shellIdentity.role}>
       <Modal
         open={!isParent && examPopup.open && !!examPopup.schedule}
         onClose={() => {

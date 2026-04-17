@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -78,6 +83,38 @@ export class UsersService {
   }
 
   // Super admin: list all users
+  /** Super admin — fix typos / wrong inbox on registration (email is login + notification target). */
+  async adminPatchUser(
+    userId: string,
+    data: {
+      email?: string;
+    },
+  ) {
+    const email = data.email?.trim();
+    if (!email) throw new BadRequestException('email is required');
+
+    const existing = await this.prisma.user.findFirst({
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+        NOT: { id: userId },
+      },
+    });
+    if (existing) throw new ConflictException('Email already registered');
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { email },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        role: true,
+        isActive: true,
+      },
+    });
+  }
+
   async findAll(query: { role?: string; search?: string }) {
     const where: any = {};
     if (query.role) where.role = query.role;
