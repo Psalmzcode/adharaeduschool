@@ -9,6 +9,7 @@ import { SchoolStatus, Role } from '@prisma/client';
 import { EmailService } from '../email/email.service';
 import { ConfigService } from '@nestjs/config';
 import { CompleteSchoolProfileDto } from './dto/complete-school-profile.dto';
+import { SaveSchoolProfileDraftDto } from './dto/save-school-profile-draft.dto';
 
 /** Fields school admins may PATCH (after approval). Excludes privilege / billing fields. */
 const SCHOOL_ADMIN_PATCH_KEYS = new Set([
@@ -172,6 +173,66 @@ export class SchoolsService {
         profileCompletedAt: new Date(),
       },
     });
+  }
+
+  /**
+   * Save onboarding draft (no profileCompletedAt).
+   * Useful when admins want to fill details over multiple sessions.
+   */
+  async saveProfileDraft(adminId: string, dto: SaveSchoolProfileDraftDto) {
+    const school = await this.findByAdmin(adminId);
+    if (school.status !== SchoolStatus.APPROVED) {
+      throw new ForbiddenException('Your school must be approved before you can update the profile.');
+    }
+
+    const data: any = {};
+
+    if (dto.displayName != null) {
+      const d = dto.displayName.trim();
+      if (d) data.name = d;
+    }
+    if (dto.officialName != null) {
+      const v = dto.officialName.trim();
+      if (v) data.officialName = v;
+    }
+    if (dto.schoolType != null) data.schoolType = dto.schoolType;
+    if (dto.website != null) data.website = dto.website.trim() || null;
+
+    if (dto.officialEmail != null) data.officialEmail = dto.officialEmail.trim();
+    if (dto.officialPhone != null) data.officialPhone = dto.officialPhone.trim();
+    if (dto.principalName != null) data.principalName = dto.principalName.trim();
+    if (dto.principalPhone != null) data.principalPhone = dto.principalPhone.trim();
+
+    if (dto.ictContactName != null) data.ictContactName = dto.ictContactName.trim() || null;
+    if (dto.ictContactPhone != null) data.ictContactPhone = dto.ictContactPhone.trim() || null;
+    if (dto.ictContactEmail != null) data.ictContactEmail = dto.ictContactEmail.trim() || null;
+
+    if (dto.billingContactName != null) data.billingContactName = dto.billingContactName.trim() || null;
+    if (dto.billingContactEmail != null) data.billingContactEmail = dto.billingContactEmail.trim() || null;
+    if (dto.billingContactPhone != null) data.billingContactPhone = dto.billingContactPhone.trim() || null;
+
+    if (dto.platformLevels != null) {
+      data.platformLevels = dto.platformLevels.map((s) => String(s || '').trim()).filter(Boolean);
+    }
+    if (dto.enrolledTracks != null) data.enrolledTracks = dto.enrolledTracks;
+    if (dto.currentTermLabel != null) data.currentTermLabel = dto.currentTermLabel.trim();
+    if (dto.academicYearLabel != null) data.academicYearLabel = dto.academicYearLabel.trim();
+    if (dto.studentCountBand != null) data.studentCountBand = dto.studentCountBand.trim();
+    if (dto.streamsCount !== undefined) data.streamsCount = dto.streamsCount ?? null;
+    if (dto.visitDeploymentNotes != null) data.visitDeploymentNotes = dto.visitDeploymentNotes.trim() || null;
+    if (dto.logoUrl != null) data.logoUrl = dto.logoUrl.trim() || null;
+    if (dto.timezone != null) data.timezone = dto.timezone.trim() || 'Africa/Lagos';
+    if (dto.locale != null) data.locale = dto.locale.trim() || 'en-NG';
+
+    if (!Object.keys(data).length) {
+      return { saved: true, id: school.id };
+    }
+
+    const updated = await this.prisma.school.update({
+      where: { id: school.id },
+      data,
+    });
+    return { saved: true, school: updated };
   }
 
   // Super admin — approve / reject / suspend

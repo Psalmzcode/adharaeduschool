@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { v2 as cloudinary } from 'cloudinary';
 import { PrismaService } from '../prisma/prisma.service';
@@ -21,6 +22,17 @@ export class UploadsService {
     folder = 'adharaedu',
   ): Promise<{ url: string; publicId: string }> {
     if (!file) throw new BadRequestException('No file provided');
+
+    if (entityType === 'curriculum-lesson' || entityType === 'module-material') {
+      const user = await this.prisma.user.findUnique({ where: { id: uploadedBy }, select: { role: true } });
+      const ok = user?.role === Role.SUPER_ADMIN || user?.role === Role.CURRICULUM_LEAD;
+      if (!ok) {
+        throw new ForbiddenException('Only curriculum authors can upload learning materials for modules or lessons');
+      }
+      if (!String(entityId || '').trim()) {
+        throw new BadRequestException('entityId is required for curriculum learning materials');
+      }
+    }
 
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
@@ -56,7 +68,20 @@ export class UploadsService {
     return { deleted: true };
   }
 
-  async getUploadsByEntity(entityType: string, entityId: string) {
+  async getUploadsByEntity(
+    entityType: string,
+    entityId: string,
+    user?: { sub: string; role: string },
+  ) {
+    if (!String(entityId || '').trim()) {
+      throw new BadRequestException('entityId is required');
+    }
+    if (entityType === 'curriculum-lesson' || entityType === 'module-material') {
+      const role = user?.role;
+      if (role !== Role.SUPER_ADMIN && role !== Role.CURRICULUM_LEAD) {
+        throw new ForbiddenException('Listing curriculum learning materials requires curriculum author access');
+      }
+    }
     return this.prisma.upload.findMany({ where: { entityType, entityId }, orderBy: { createdAt: 'desc' } });
   }
 }

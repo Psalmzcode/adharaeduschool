@@ -120,7 +120,7 @@ export class CbtController {
   @UseGuards(JwtAuthGuard, RolesGuard, TutorOnboardingGuard)
   @ApiBearerAuth()
   @Roles('TUTOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN')
-  getAttempts(@Param('id') id: string) {
-    return this.cbtService.getExamAttempts(id);
+  getAttempts(@Param('id') id: string, @Request() req: { user: { sub: string; role: string } }) {
+    return this.cbtService.getExamAttempts(id, req.user);
   }
 }

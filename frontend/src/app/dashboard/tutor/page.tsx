@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
@@ -10,33 +10,55 @@ import {
   tutorsApi, attendanceApi, cbtApi, reportsApi,
   lessonsApi, messagesApi, studentsApi, usersApi, uploadsApi,
   sessionsApi, assignmentsApi, examSchedulesApi, bulkUploadApi, modulesApi, schoolClassesApi, tracksApi, practicalsApi,
-  curriculumApi,
+  curriculumApi, tutorAttendanceApi,
 } from '@/lib/api'
 import { notify } from '@/lib/notify'
 
-function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  /** Wider panels for dense dashboards; keeps within viewport on small screens */
+  panelMaxWidth = 720,
+  overlayZIndex = 1200,
+}: {
+  open: boolean
+  onClose: () => void
+  title: string
+  children: React.ReactNode
+  panelMaxWidth?: number | string
+  overlayZIndex?: number
+}) {
+  const titleId = useId()
   if (!open) return null
+  const maxW =
+    typeof panelMaxWidth === 'number' ? `${panelMaxWidth}px` : (panelMaxWidth as string)
   return (
     <div
+      role="presentation"
       onClick={onClose}
       style={{
         position: 'fixed',
         inset: 0,
         background: 'rgba(0,0,0,0.7)',
         backdropFilter: 'blur(4px)',
-        zIndex: 1200,
+        zIndex: overlayZIndex,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 16,
+        padding: 'max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))',
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
-          maxWidth: 720,
-          maxHeight: '90vh',
+          maxWidth: `min(${maxW}, calc(100vw - 24px))`,
+          maxHeight: 'min(92vh, 92dvh)',
           background: 'var(--navy2)',
           border: '1px solid var(--border)',
           borderRadius: 18,
@@ -45,11 +67,11 @@ function Modal({ open, onClose, title, children }: { open: boolean; onClose: () 
           flexDirection: 'column',
         }}
       >
-        <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--white)' }}>{title}</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20 }}>✕</button>
+        <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
+          <h3 id={titleId} style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--white)', lineHeight: 1.25, paddingRight: 8 }}>{title}</h3>
+          <button type="button" aria-label="Close" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20, flexShrink: 0 }}>✕</button>
         </div>
-        <div style={{ padding: 16, overflow: 'auto' }}>{children}</div>
+        <div style={{ padding: 16, overflow: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>{children}</div>
       </div>
     </div>
   )
@@ -77,7 +99,7 @@ function ConfirmModal({
   onClose: () => void
 }) {
   return (
-    <Modal open={open} onClose={onClose} title={title}>
+    <Modal open={open} onClose={onClose} title={title} overlayZIndex={1300}>
       <div style={{ display: 'grid', gap: 14 }}>
         <div className="text-sm text-muted" style={{ lineHeight: 1.6 }}>
           {message}
@@ -959,18 +981,75 @@ function TutorResults({
   classes: any[]
   onRefreshClasses?: () => Promise<void>
 }) {
-  const [selectedClass, setSelectedClass] = useState(classes[0]?.className || '')
-  const students = (classes.find(c => c.className === selectedClass)?.students || [])
+  const classKey = useCallback((c: any) => {
+    const schoolId = String(c?.schoolId || c?.school?.id || '').trim()
+    const track = String(c?.track || '').trim()
+    const className = String(c?.className || '').trim()
+    return `${schoolId}::${track}::${className}`
+  }, [])
+
+  const classChoices = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: Array<{ key: string; label: string; className: string }> = []
+    for (const c of Array.isArray(classes) ? classes : []) {
+      const schoolId = String(c?.schoolId || c?.school?.id || '').trim()
+      const className = String(c?.className || '').trim()
+      const track = String(c?.track || '').trim()
+      if (!schoolId || !className || !track) continue
+      const key = classKey(c)
+      if (seen.has(key)) continue
+      seen.add(key)
+      const schoolName = String(c?.school?.name || '').trim() || 'School'
+      const trackLabel = track.replace(/^TRACK_/i, 'Track ')
+      opts.push({
+        key,
+        className,
+        label: `${className} · ${trackLabel} · ${schoolName}`,
+      })
+    }
+    return opts
+  }, [classes, classKey])
+
+  const [selectedClassKey, setSelectedClassKey] = useState<string>(() => classChoices[0]?.key || '')
+
+  // Keep selection valid if class list changes.
+  useEffect(() => {
+    if (!classChoices.length) {
+      setSelectedClassKey('')
+      return
+    }
+    if (!selectedClassKey || !classChoices.some((c) => c.key === selectedClassKey)) {
+      setSelectedClassKey(classChoices[0].key)
+    }
+  }, [selectedClassKey, classChoices])
+
+  const selectedClassObj = useMemo(
+    () => (Array.isArray(classes) ? classes.find((c: any) => classKey(c) === selectedClassKey) : null),
+    [classes, classKey, selectedClassKey],
+  )
+
+  const selectedClass = selectedClassObj?.className || ''
+  const students = (selectedClassObj?.students || [])
   const [scores, setScores] = useState<Record<string, string>>({})
+  const [scoresLoading, setScoresLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [advancing, setAdvancing] = useState(false)
   const [classProgress, setClassProgress] = useState<any>(null)
   const [loadingProgress, setLoadingProgress] = useState(false)
+  const [retakeStudentId, setRetakeStudentId] = useState<string>('')
+  const [retakeModuleId, setRetakeModuleId] = useState<string>('')
+  const [retakeStatus, setRetakeStatus] = useState<any>(null)
+  const [checkingRetake, setCheckingRetake] = useState(false)
+  const [applyingRetake, setApplyingRetake] = useState(false)
+  /** Best module CBT % and best practical % per student (from suggested-scores; mirrors how practicals show per-task scores). */
+  const [markBreakdown, setMarkBreakdown] = useState<Record<string, { cbtBest: number | null; pracBest: number | null }>>({})
+
+  const fmtMarkComponent = (v: number | null | undefined) =>
+    v != null && !Number.isNaN(Number(v)) ? String(Math.round(Number(v))) : '—'
 
   const grade = (v: string) => { const n = +v; if (!v || isNaN(n)) return '—'; if (n >= 90) return 'A+'; if (n >= 80) return 'A'; if (n >= 70) return 'B+'; if (n >= 60) return 'B'; if (n >= 50) return 'C'; return 'F' }
   const gc = (v: string) => { const n = +v; if (!v || isNaN(n)) return 'warning'; return n >= 70 ? 'success' : n >= 50 ? 'warning' : 'danger' }
-  const selectedClassObj = classes.find((c: any) => c.className === selectedClass)
   const schoolId = selectedClassObj?.schoolId || selectedClassObj?.school?.id || ''
 
   const loadClassProgress = useCallback(async () => {
@@ -993,7 +1072,17 @@ function TutorResults({
     loadClassProgress()
   }, [selectedClass, loadClassProgress])
 
-  /** Pre-fill inputs from students.moduleProgress for the class “current module” (otherwise everything looks empty). */
+  // Reset retake selection when class changes
+  useEffect(() => {
+    setRetakeStudentId('')
+    setRetakeModuleId('')
+    setRetakeStatus(null)
+  }, [selectedClass])
+
+  /**
+   * One pipeline: saved `moduleProgress.score` wins; otherwise suggested from CBT ± practical.
+   * (Previously two effects raced: the DB-only effect could run after suggested-scores and wipe composites → all "—".)
+   */
   useEffect(() => {
     if (loadingProgress) return
     const mid = classProgress?.currentModule?.id
@@ -1002,15 +1091,50 @@ function TutorResults({
       return
     }
     const st = (classes.find((c: any) => c.className === selectedClass)?.students || []) as any[]
-    const next: Record<string, string> = {}
-    for (const s of st) {
-      const row = (s.moduleProgress || []).find((p: any) => p.moduleId === mid || p.module?.id === mid)
-      if (row?.score != null && row.score !== '') {
-        next[s.id] = String(Math.round(Number(row.score)))
-      }
+    if (!st.length) {
+      setScores({})
+      return
     }
-    setScores(next)
-  }, [loadingProgress, selectedClass, classProgress?.currentModule?.id, classes])
+    let cancelled = false
+    ;(async () => {
+      setScoresLoading(true)
+      const next: Record<string, string> = {}
+      for (const s of st) {
+        const row = (s.moduleProgress || []).find((p: any) => p.moduleId === mid || p.module?.id === mid)
+        if (row?.score != null && row.score !== '') {
+          next[s.id] = String(Math.round(Number(row.score)))
+        }
+      }
+      if (schoolId && selectedClass) {
+        try {
+          const rows = await modulesApi.suggestedScores(schoolId, selectedClass, mid, 50).catch(() => [])
+          if (cancelled) return
+          const byStudent = new Map<string, any>()
+          ;(Array.isArray(rows) ? rows : []).forEach((r: any) => {
+            if (r?.studentId) byStudent.set(String(r.studentId), r)
+          })
+          for (const s of st) {
+            const sid = String(s?.id || '')
+            if (!sid) continue
+            if (next[sid] != null && String(next[sid]).trim() !== '') continue
+            const r = byStudent.get(sid)
+            const composite = r?.compositeScore
+            if (typeof composite === 'number' && !Number.isNaN(composite)) {
+              next[sid] = String(Math.round(composite))
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!cancelled) setScores(next)
+      if (!cancelled) setScoresLoading(false)
+    })()
+    return () => {
+      cancelled = true
+      setScoresLoading(false)
+    }
+  }, [loadingProgress, selectedClass, classProgress?.currentModule?.id, classes, schoolId])
 
   const saveAll = async () => {
     if (!classProgress?.currentModule?.id) {
@@ -1075,6 +1199,53 @@ function TutorResults({
     setAdvancing(false)
   }
 
+  const selectedRetakeStudent = students.find((s: any) => s.id === retakeStudentId)
+  const failedModules = (selectedRetakeStudent?.moduleProgress || [])
+    .filter((p: any) => p?.status === 'FAILED' && (p.moduleId || p.module?.id))
+    .map((p: any) => ({
+      id: String(p.moduleId || p.module?.id),
+      number: p.module?.number,
+      title: p.module?.title,
+    }))
+    .filter((m: any) => m.id)
+    // de-dupe in case API includes duplicates
+    .filter((m: any, idx: number, arr: any[]) => arr.findIndex((x) => x.id === m.id) === idx)
+    .sort((a: any, b: any) => (Number(a.number || 0) - Number(b.number || 0)) || String(a.title || '').localeCompare(String(b.title || '')))
+
+  const checkRetake = async () => {
+    if (!retakeStudentId || !retakeModuleId) {
+      notify.warning('Select a student and a failed module')
+      return
+    }
+    setCheckingRetake(true)
+    try {
+      const st = await modulesApi.retakeStatus(retakeStudentId, retakeModuleId, 50)
+      setRetakeStatus(st)
+      if (st?.ready) notify.success('Ready to clear — CBT + Practical passed')
+      else notify.warning('Not ready yet — CBT and Practical must both be ≥ 50%')
+    } catch (e: any) {
+      setRetakeStatus(null)
+      notify.fromError(e, 'Could not check retake status')
+    }
+    setCheckingRetake(false)
+  }
+
+  const applyRetake = async () => {
+    if (!retakeStudentId || !retakeModuleId) return
+    setApplyingRetake(true)
+    try {
+      const res = await modulesApi.applyRetake(retakeStudentId, retakeModuleId, 50)
+      setRetakeStatus(res)
+      notify.success('Failed module cleared')
+      if (onRefreshClasses) {
+        try { await onRefreshClasses() } catch { /* ignore */ }
+      }
+    } catch (e: any) {
+      notify.fromError(e, 'Could not clear failed module')
+    }
+    setApplyingRetake(false)
+  }
+
   return (
     <div>
       <div className="flex-between mb-20">
@@ -1086,8 +1257,15 @@ function TutorResults({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <select className="form-input" value={selectedClass} onChange={e => { setSelectedClass(e.target.value); setSaved(false) }} style={{ appearance: 'none', width: 120 }}>
-            {classes.map(c => <option key={c.className}>{c.className}</option>)}
+          <select
+            className="form-input"
+            value={selectedClassKey}
+            onChange={(e) => { setSelectedClassKey(e.target.value); setSaved(false) }}
+            style={{ appearance: 'none', width: 260 }}
+          >
+            {classChoices.map((c) => (
+              <option key={c.key} value={c.key}>{c.label}</option>
+            ))}
           </select>
           <button onClick={saveAll} className="btn btn-primary btn-sm" disabled={saving}>{saving ? 'Saving…' : saved ? '✓ Saved' : 'Save All Scores'}</button>
           <button onClick={advanceClassModule} className="btn btn-ghost btn-sm" disabled={advancing || !classProgress?.currentModule}>{advancing ? 'Advancing…' : 'Advance Class Module →'}</button>
@@ -1107,6 +1285,12 @@ function TutorResults({
         )}
       </div>
       <div className="card">
+        {scoresLoading && (
+          <div className="text-muted text-xs mb-12" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="badge badge-info">Loading</span>
+            Generating scores from CBT + practical…
+          </div>
+        )}
         <table className="data-table">
           <thead><tr><th>Student</th><th>Current Module</th><th>Score (0–100)</th><th>Grade</th></tr></thead>
           <tbody>
@@ -1116,14 +1300,95 @@ function TutorResults({
                 <tr key={s.id}>
                   <td><div className="student-name"><div className="stu-av" style={{ ...studentColor(i) }}>{initials(name)}</div>{name}</div></td>
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{classProgress?.currentModule?.title || 'No active module'}</td>
-                  <td><input type="number" min={0} max={100} value={scores[s.id] || ''} onChange={e => { setScores(sc => ({ ...sc, [s.id]: e.target.value })); setSaved(false) }} style={{ width: 64, background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: 'var(--white)', textAlign: 'center', fontFamily: 'var(--font-display)', fontWeight: 700 }} /></td>
-                  <td><span className={`badge badge-${gc(scores[s.id] || '')}`}>{grade(scores[s.id] || '')}</span></td>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={scores[s.id] || ''}
+                      disabled={scoresLoading}
+                      onChange={e => { setScores(sc => ({ ...sc, [s.id]: e.target.value })); setSaved(false) }}
+                      style={{ width: 64, background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: 'var(--white)', textAlign: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, opacity: scoresLoading ? 0.6 : 1 }}
+                    />
+                  </td>
+                  <td><span className={`badge badge-${gc(scores[s.id] || '')}`}>{scoresLoading && !scores[s.id] ? '…' : grade(scores[s.id] || '')}</span></td>
                 </tr>
               )
             })}
             {students.length === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No students in selected class</td></tr>}
           </tbody>
         </table>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="flex-between mb-12" style={{ gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div className="font-display fw-700 text-white" style={{ fontSize: 16 }}>Module retake (CBT + Practical)</div>
+            <div className="text-muted text-xs mt-4" style={{ maxWidth: 720 }}>
+              Clear a <strong className="text-white">FAILED</strong> module only when the student has passed the <strong className="text-white">module CBT quiz</strong> and the <strong className="text-white">module practical</strong> (≥ 50% each).
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              className="form-input"
+              value={retakeStudentId}
+              onChange={(e) => { setRetakeStudentId(e.target.value); setRetakeModuleId(''); setRetakeStatus(null) }}
+              style={{ appearance: 'none', minWidth: 200 }}
+            >
+              <option value="">Select student…</option>
+              {students.map((s: any) => (
+                <option key={s.id} value={s.id}>
+                  {`${s.user?.firstName || ''} ${s.user?.lastName || ''}`.trim() || s.regNumber || s.id}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="form-input"
+              value={retakeModuleId}
+              onChange={(e) => { setRetakeModuleId(e.target.value); setRetakeStatus(null) }}
+              style={{ appearance: 'none', minWidth: 260 }}
+              disabled={!retakeStudentId}
+            >
+              <option value="">{retakeStudentId ? (failedModules.length ? 'Select failed module…' : 'No failed modules') : 'Select student first'}</option>
+              {failedModules.map((m: any) => (
+                <option key={m.id} value={m.id}>
+                  {m.number ? `Module ${m.number}: ` : ''}{m.title || m.id}
+                </option>
+              ))}
+            </select>
+
+            <button type="button" className="btn btn-ghost btn-sm" onClick={checkRetake} disabled={checkingRetake || !retakeStudentId || !retakeModuleId}>
+              {checkingRetake ? 'Checking…' : 'Check retake'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={applyRetake}
+              disabled={applyingRetake || !retakeStatus?.ready}
+              title={!retakeStatus?.ready ? 'CBT + Practical must both be ≥ 50%' : 'Clear failed module'}
+            >
+              {applyingRetake ? 'Clearing…' : 'Clear failed module'}
+            </button>
+          </div>
+        </div>
+
+        {retakeStatus && (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <span className={`badge badge-${retakeStatus?.cbt?.passed ? 'success' : 'warning'}`}>
+              CBT: {retakeStatus?.cbt?.bestScore != null ? `${Math.round(retakeStatus.cbt.bestScore)}%` : '—'}
+            </span>
+            <span className={`badge badge-${retakeStatus?.practical?.passed ? 'success' : 'warning'}`}>
+              Practical: {retakeStatus?.practical?.bestScore != null ? `${Math.round(retakeStatus.practical.bestScore)}%` : '—'}
+            </span>
+            <span className={`badge badge-${retakeStatus?.ready ? 'success' : 'warning'}`}>
+              {retakeStatus?.ready ? 'Ready' : 'Not ready'}
+            </span>
+            {retakeStatus?.compositeScore != null && (
+              <span className="badge badge-info">Composite: {Math.round(retakeStatus.compositeScore)}%</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1187,6 +1452,21 @@ function LessonPlans({ classes }: { classes: any[] }) {
   const [loadingModules, setLoadingModules] = useState(false)
   const [materialFile, setMaterialFile] = useState<File | null>(null)
   const [attachmentsByPlan, setAttachmentsByPlan] = useState<Record<string, any[]>>({})
+  const [aiDraftingSteps, setAiDraftingSteps] = useState(false)
+  const [aiDraftingMaterial, setAiDraftingMaterial] = useState(false)
+  const [materialDraftModal, setMaterialDraftModal] = useState(false)
+  const [materialDraft, setMaterialDraft] = useState<{
+    sessionTitle: string
+    slides: { title: string; bullets: string[] }[]
+    markdown: string
+    teacherGuideMarkdown?: string
+    studentHandoutMarkdown?: string
+    practice?: { classwork: string[]; homework: string[]; answers: string[] }
+    modelUsed?: string
+  } | null>(null)
+  const [materialView, setMaterialView] = useState<'slides' | 'teacher' | 'handout' | 'practice'>('handout')
+  const [materialDepth, setMaterialDepth] = useState<'full' | 'quick'>('full')
+  const [publishingMaterial, setPublishingMaterial] = useState(false)
   const [curriculumLessonsPick, setCurriculumLessonsPick] = useState<any[]>([])
   const curriculumAutoDoneRef = useRef(false)
   const [form, setForm] = useState(buildDefaultForm)
@@ -1359,6 +1639,217 @@ function LessonPlans({ classes }: { classes: any[] }) {
   const applySuggestedSteps = () => {
     setForm(f => ({ ...f, steps: DEFAULT_STEP_TEMPLATE.map((s) => ({ ...s })) }))
   }
+  const draftStepsWithAi = async () => {
+    if (!form.moduleId) {
+      notify.warning('Select a module first — the draft is aligned to module objectives.')
+      return
+    }
+    setAiDraftingSteps(true)
+    try {
+      const res = await lessonsApi.generateSteps({
+        moduleId: form.moduleId,
+        curriculumLessonId: form.curriculumLessonId?.trim() || undefined,
+        durationMins: Number(form.durationMins) || 75,
+      })
+      const nextSteps = Array.isArray((res as any)?.steps) ? (res as any).steps : []
+      if (!nextSteps.length) {
+        notify.warning('No steps returned — try again or use suggested steps.')
+        return
+      }
+      setForm((f) => ({
+        ...f,
+        steps: nextSteps.map((s: any) => ({
+          title: String(s?.title || ''),
+          desc: String(s?.desc || ''),
+          mins: Math.max(0, Number(s?.mins) || 0),
+        })),
+      }))
+      notify.success('AI draft loaded — review and edit before saving.')
+    } catch (e: any) {
+      notify.fromError(e)
+    } finally {
+      setAiDraftingSteps(false)
+    }
+  }
+
+  const draftLearningMaterialWithAi = async () => {
+    if (!form.moduleId) {
+      notify.warning('Select a module first — the draft follows module objectives (and optional curriculum lesson).')
+      return
+    }
+    setAiDraftingMaterial(true)
+    try {
+      const res = await lessonsApi.generateLearningMaterial({
+        moduleId: form.moduleId,
+        curriculumLessonId: form.curriculumLessonId?.trim() || undefined,
+        depth: materialDepth,
+      })
+      const sessionTitle = String((res as any)?.sessionTitle || '').trim() || 'Teaching material'
+      const slides = Array.isArray((res as any)?.slides) ? (res as any).slides : []
+      const markdown = String((res as any)?.markdown || '').trim()
+      const teacherGuideMarkdown = String((res as any)?.teacherGuideMarkdown || '').trim()
+      const studentHandoutMarkdown = String((res as any)?.studentHandoutMarkdown || '').trim()
+      const practice = (res as any)?.practice
+      if (!slides.length && !markdown) {
+        notify.warning('No material returned — try again.')
+        return
+      }
+      setMaterialDraft({
+        sessionTitle,
+        slides: slides.map((s: any) => ({
+          title: String(s?.title || ''),
+          bullets: Array.isArray(s?.bullets) ? s.bullets.map((b: any) => String(b || '').trim()).filter(Boolean) : [],
+        })),
+        markdown: markdown || '',
+        teacherGuideMarkdown,
+        studentHandoutMarkdown,
+        practice:
+          practice && typeof practice === 'object'
+            ? {
+                classwork: Array.isArray(practice.classwork) ? practice.classwork.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+                homework: Array.isArray(practice.homework) ? practice.homework.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+                answers: Array.isArray(practice.answers) ? practice.answers.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+              }
+            : undefined,
+        modelUsed: (res as any)?.modelUsed,
+      })
+      setMaterialView(studentHandoutMarkdown ? 'handout' : teacherGuideMarkdown ? 'teacher' : 'slides')
+      setMaterialDraftModal(true)
+      const depthLabel = (res as any)?.depth === 'quick' ? 'Quick draft' : 'Full lesson pack'
+      notify.success(`${depthLabel} ready — review the student handout, then publish or export.`)
+    } catch (e: any) {
+      notify.fromError(e)
+    } finally {
+      setAiDraftingMaterial(false)
+    }
+  }
+
+  const downloadMaterialMarkdown = () => {
+    if (!materialDraft) return
+    let text = materialDraft.markdown?.trim() || ''
+    if (!text && materialDraft.slides.length) {
+      const lines = [`# ${materialDraft.sessionTitle}`, '']
+      for (const s of materialDraft.slides) {
+        lines.push(`## ${s.title}`, '')
+        for (const b of s.bullets) lines.push(`- ${b}`)
+        lines.push('')
+      }
+      text = lines.join('\n').trim()
+    }
+    if (!text) return
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${(materialDraft.sessionTitle || 'material').replace(/[^\w\-]+/g, '_').slice(0, 60)}.md`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const downloadTeacherGuideMarkdown = () => {
+    if (!materialDraft?.teacherGuideMarkdown?.trim()) return
+    const blob = new Blob([materialDraft.teacherGuideMarkdown.trim()], { type: 'text/markdown;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${(materialDraft.sessionTitle || 'teacher_guide').replace(/[^\w\-]+/g, '_').slice(0, 60)}__teacher.md`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const downloadStudentHandoutMarkdown = () => {
+    if (!materialDraft?.studentHandoutMarkdown?.trim()) return
+    const blob = new Blob([materialDraft.studentHandoutMarkdown.trim()], { type: 'text/markdown;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${(materialDraft.sessionTitle || 'handout').replace(/[^\w\-]+/g, '_').slice(0, 60)}__handout.md`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const publishHandoutToClass = async () => {
+    if (!materialDraft?.studentHandoutMarkdown?.trim()) {
+      notify.warning('Generate or paste a student handout first')
+      return
+    }
+    if (!editingPlanId) {
+      notify.warning('Save this lesson plan first, then publish the handout to your class.')
+      return
+    }
+    setPublishingMaterial(true)
+    try {
+      await lessonsApi.publishMaterial(editingPlanId, {
+        studentHandoutMarkdown: materialDraft.studentHandoutMarkdown.trim(),
+      })
+      notify.success('Student handout published — your class can read it under My Modules.')
+      const refreshedPlans = await lessonsApi.mine().catch(() => null)
+      if (Array.isArray(refreshedPlans)) setPlans(refreshedPlans)
+    } catch (e: any) {
+      notify.fromError(e)
+    }
+    setPublishingMaterial(false)
+  }
+
+  const downloadPracticeMarkdown = () => {
+    if (!materialDraft?.practice) return
+    const p = materialDraft.practice
+    const lines: string[] = [`# Practice: ${materialDraft.sessionTitle}`, '']
+    if (p.classwork?.length) {
+      lines.push('## Classwork', '')
+      p.classwork.forEach((q, i) => lines.push(`${i + 1}. ${q}`))
+      lines.push('')
+    }
+    if (p.homework?.length) {
+      lines.push('## Homework', '')
+      p.homework.forEach((q, i) => lines.push(`${i + 1}. ${q}`))
+      lines.push('')
+    }
+    if (p.answers?.length) {
+      lines.push('## Answer key', '')
+      p.answers.forEach((a, i) => lines.push(`${i + 1}. ${a}`))
+      lines.push('')
+    }
+    const text = lines.join('\n').trim()
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${(materialDraft.sessionTitle || 'practice').replace(/[^\w\-]+/g, '_').slice(0, 60)}__practice.md`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const downloadMaterialHtml = () => {
+    if (!materialDraft) return
+    const esc = (t: string) =>
+      t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const slidesHtml = materialDraft.slides
+      .map(
+        (s) => `
+      <section class="slide">
+        <h2>${esc(s.title)}</h2>
+        <ul>${s.bullets.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>
+      </section>`,
+      )
+      .join('\n')
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>${esc(materialDraft.sessionTitle)}</title>
+<style>
+  body{font-family:system-ui,sans-serif;line-height:1.45;color:#111;max-width:720px;margin:24px auto;padding:0 16px;}
+  .slide{page-break-after:always;margin-bottom:48px;padding:16px 0;border-bottom:1px solid #eee;}
+  .slide:last-child{border-bottom:none;}
+  h1{font-size:1.5rem;} h2{font-size:1.2rem;margin-bottom:12px;}
+  ul{padding-left:1.2rem;}
+  @media print{ .slide{page-break-after:always;border:none;} body{margin:0;max-width:none;} }
+</style></head><body>
+<h1>${esc(materialDraft.sessionTitle)}</h1>
+${slidesHtml}
+<p style="margin-top:48px;font-size:12px;color:#666;">Draft — AdharaEdu tutor export</p>
+</body></html>`
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${(materialDraft.sessionTitle || 'slides').replace(/[^\w\-]+/g, '_').slice(0, 60)}.html`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   const removeStep = (index: number) => {
     setForm(f => ({ ...f, steps: f.steps.filter((_, i) => i !== index) }))
   }
@@ -1420,6 +1911,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
         scheduledAt: form.scheduledAt,
         schoolId,
         steps: cleanedSteps.map(s => ({ ...s, color: 'var(--gold)' })),
+        studentHandoutMarkdown: materialDraft?.studentHandoutMarkdown?.trim() || undefined,
       }
       if (editingPlanId) {
         await lessonsApi.update(editingPlanId, payload)
@@ -1427,6 +1919,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
       } else {
         const created = await lessonsApi.create(payload)
         const createdPlans = Array.isArray(created) ? created : [created]
+        if (createdPlans[0]?.id) setEditingPlanId(createdPlans[0].id)
         if (materialFile) {
           await Promise.all(
             createdPlans.map((plan: any) => uploadsApi.lessonPlan(materialFile, plan.id).catch(() => null))
@@ -1514,6 +2007,127 @@ function LessonPlans({ classes }: { classes: any[] }) {
         onClose={() => setConfirm(null)}
         onConfirm={() => confirm?.onConfirm?.()}
       />
+      <Modal
+        open={materialDraftModal && !!materialDraft}
+        onClose={() => {
+          setMaterialDraftModal(false)
+          setMaterialDraft(null)
+        }}
+        title="AI teaching material (draft)"
+        panelMaxWidth={920}
+      >
+        {materialDraft && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <p className="text-muted text-sm" style={{ margin: 0 }}>
+              Start with the <strong>Student handout</strong> tab for the full topic write-up. Slides are a short classroom summary only.
+              Export as Markdown or publish the handout to your class after saving the lesson plan.
+            </p>
+            {materialDraft.modelUsed && (
+              <div className="text-muted text-xs">Model: {materialDraft.modelUsed}</div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={downloadMaterialMarkdown}
+                disabled={!materialDraft.markdown?.trim() && !materialDraft.slides.length}
+              >
+                Download .md
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={downloadTeacherGuideMarkdown} disabled={!materialDraft.teacherGuideMarkdown?.trim()}>
+                Teacher guide .md
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={downloadStudentHandoutMarkdown} disabled={!materialDraft.studentHandoutMarkdown?.trim()}>
+                Student handout .md
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={downloadPracticeMarkdown} disabled={!materialDraft.practice}>
+                Practice + answers .md
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={downloadMaterialHtml}>
+                Download .html (slides)
+              </button>
+              <button
+                type="button"
+                className="btn btn-success btn-sm"
+                onClick={publishHandoutToClass}
+                disabled={publishingMaterial || !materialDraft.studentHandoutMarkdown?.trim() || !editingPlanId}
+                title={!editingPlanId ? 'Save the lesson plan first' : 'Publish student handout to class'}
+              >
+                {publishingMaterial ? 'Publishing…' : 'Publish handout to class'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className={`btn btn-sm ${materialView === 'handout' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setMaterialView('handout')} disabled={!materialDraft.studentHandoutMarkdown?.trim()}>
+                Student handout
+              </button>
+              <button type="button" className={`btn btn-sm ${materialView === 'slides' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setMaterialView('slides')}>
+                Slides (summary)
+              </button>
+              <button type="button" className={`btn btn-sm ${materialView === 'teacher' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setMaterialView('teacher')} disabled={!materialDraft.teacherGuideMarkdown?.trim()}>
+                Teacher guide
+              </button>
+              <button type="button" className={`btn btn-sm ${materialView === 'practice' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setMaterialView('practice')} disabled={!materialDraft.practice}>
+                Practice
+              </button>
+            </div>
+            <div style={{ border: '1px solid var(--border2)', borderRadius: 12, padding: 14, maxHeight: 'min(55vh, 520px)', overflow: 'auto' }}>
+              <div className="font-display fw-700 text-white mb-12" style={{ fontSize: 16 }}>{materialDraft.sessionTitle}</div>
+              {materialView === 'slides' && (
+                <>
+                  {materialDraft.slides.map((s, idx) => (
+                    <div key={idx} style={{ marginBottom: 20, paddingBottom: 16, borderBottom: idx < materialDraft.slides.length - 1 ? '1px dashed var(--border2)' : 'none' }}>
+                      <div style={{ color: 'var(--gold)', fontWeight: 600, marginBottom: 8 }}>{s.title || `Slide ${idx + 1}`}</div>
+                      <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--white)', fontSize: 14 }}>
+                        {s.bullets.map((b, j) => (
+                          <li key={j} style={{ marginBottom: 4 }}>{b}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </>
+              )}
+              {materialView === 'teacher' && (
+                <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--white)', fontSize: 13, margin: 0 }}>
+                  {materialDraft.teacherGuideMarkdown || '—'}
+                </pre>
+              )}
+              {materialView === 'handout' && (
+                <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--white)', fontSize: 13, margin: 0 }}>
+                  {materialDraft.studentHandoutMarkdown || '—'}
+                </pre>
+              )}
+              {materialView === 'practice' && (
+                <div style={{ color: 'var(--white)', fontSize: 13 }}>
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="text-muted text-xs mb-6">Classwork</div>
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      {(materialDraft.practice?.classwork || []).map((q, i) => (
+                        <li key={i} style={{ marginBottom: 6 }}>{q}</li>
+                      ))}
+                    </ol>
+                  </div>
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="text-muted text-xs mb-6">Homework</div>
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      {(materialDraft.practice?.homework || []).map((q, i) => (
+                        <li key={i} style={{ marginBottom: 6 }}>{q}</li>
+                      ))}
+                    </ol>
+                  </div>
+                  <div>
+                    <div className="text-muted text-xs mb-6">Answer key</div>
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      {(materialDraft.practice?.answers || []).map((a, i) => (
+                        <li key={i} style={{ marginBottom: 6 }}>{a}</li>
+                      ))}
+                    </ol>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
       <div className="flex-between mb-20">
         <div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Lesson Plans</h3><div className="text-muted text-sm">Structured session guides for your classes</div></div>
         <button
@@ -1655,10 +2269,54 @@ function LessonPlans({ classes }: { classes: any[] }) {
             <div>
               <div className="flex-between mb-10">
                 <label className="form-label">Lesson Steps</label>
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button type="button" onClick={applySuggestedSteps} className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}>Use Suggested Steps</button>
+                  <button
+                    type="button"
+                    onClick={draftStepsWithAi}
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: 11 }}
+                    disabled={aiDraftingSteps || !form.moduleId}
+                    title={!form.moduleId ? 'Pick a module first' : 'Gemini draft from module + optional curriculum lesson'}
+                  >
+                    {aiDraftingSteps ? 'Drafting…' : 'Draft steps with AI'}
+                  </button>
+                  <select
+                    className="form-input"
+                    value={materialDepth}
+                    onChange={(e) => setMaterialDepth(e.target.value as 'full' | 'quick')}
+                    style={{ fontSize: 11, padding: '6px 8px', width: 'auto', minWidth: 108 }}
+                    title="Full = detailed handout (slower). Quick = short draft."
+                    disabled={aiDraftingMaterial}
+                  >
+                    <option value="full">Full depth</option>
+                    <option value="quick">Quick</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={draftLearningMaterialWithAi}
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: 11 }}
+                    disabled={aiDraftingMaterial || !form.moduleId}
+                    title={
+                      !form.moduleId
+                        ? 'Pick a module first'
+                        : materialDepth === 'full'
+                          ? 'Detailed handout + teacher guide (3 AI passes, ~30–60s)'
+                          : 'Faster short draft (single pass)'
+                    }
+                  >
+                    {aiDraftingMaterial
+                      ? materialDepth === 'full'
+                        ? 'Generating full pack…'
+                        : 'Generating…'
+                      : 'Draft material (AI)'}
+                  </button>
                   <button type="button" onClick={addStep} className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}>+ Add Step</button>
                 </div>
+              </div>
+              <div className="text-muted text-xs mb-8" style={{ marginTop: -4 }}>
+                Manual template, AI draft, or your own rows — step minutes must match total duration. AI output is a starting point only until you save.
               </div>
               <div style={{ marginBottom: 10, fontSize: 12, color: minsDelta === 0 ? 'var(--success)' : 'var(--warning)' }}>
                 Allocated: {allocatedMins} / {form.durationMins || 0} min
@@ -1749,6 +2407,13 @@ function TutorAssignments({ classes }: { classes: any[] }) {
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState('')
+  const [assignmentModalOpen, setAssignmentModalOpen] = useState(false)
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState<any[]>([])
+  const [loadingAssignmentSubmissions, setLoadingAssignmentSubmissions] = useState(false)
+  const [gradingAssignment, setGradingAssignment] = useState(false)
+  const [asgScoreById, setAsgScoreById] = useState<Record<string, string>>({})
+  const [asgFeedbackById, setAsgFeedbackById] = useState<Record<string, string>>({})
   const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
   const [materialFile, setMaterialFile] = useState<File | null>(null)
   const [modulesForTrack, setModulesForTrack] = useState<Array<{ value: string; label: string; moduleId: string }>>([])
@@ -1865,6 +2530,62 @@ function TutorAssignments({ classes }: { classes: any[] }) {
     loadAssignments()
   }, [loadAssignments])
 
+  const selectedAssignment = useMemo(
+    () => items.find((a: any) => a.id === selectedAssignmentId) || null,
+    [items, selectedAssignmentId],
+  )
+
+  const loadAssignmentSubmissions = useCallback(async (assignmentId: string) => {
+    setLoadingAssignmentSubmissions(true)
+    try {
+      const data = await assignmentsApi.submissions(assignmentId)
+      const rows = Array.isArray(data) ? data : []
+      setAssignmentSubmissions(rows)
+      setAsgScoreById(
+        rows.reduce(
+          (acc: Record<string, string>, s: any) => ({
+            ...acc,
+            [s.id]: s.score != null && s.score !== undefined ? String(s.score) : '',
+          }),
+          {},
+        ),
+      )
+      setAsgFeedbackById(rows.reduce((acc: Record<string, string>, s: any) => ({ ...acc, [s.id]: s.feedback || '' }), {}))
+    } catch {
+      setAssignmentSubmissions([])
+    }
+    setLoadingAssignmentSubmissions(false)
+  }, [])
+
+  const openAssignmentModal = useCallback(
+    async (assignmentId: string) => {
+      setSelectedAssignmentId(assignmentId)
+      setAssignmentModalOpen(true)
+      await loadAssignmentSubmissions(assignmentId)
+    },
+    [loadAssignmentSubmissions],
+  )
+
+  const gradeAssignmentSubmission = useCallback(
+    async (submissionId: string) => {
+      const score = Number(asgScoreById[submissionId])
+      if (!Number.isFinite(score)) {
+        notify.warning('Enter a valid score before saving')
+        return
+      }
+      setGradingAssignment(true)
+      try {
+        await assignmentsApi.grade(submissionId, score, asgFeedbackById[submissionId] || '')
+        if (selectedAssignmentId) await loadAssignmentSubmissions(selectedAssignmentId)
+        notify.success('Grade saved')
+      } catch (e: any) {
+        notify.error(e?.message || 'Failed to save grade')
+      }
+      setGradingAssignment(false)
+    },
+    [asgFeedbackById, asgScoreById, loadAssignmentSubmissions, selectedAssignmentId],
+  )
+
   const classesForTrack = classOptions.filter((c) => c.track === form.track)
   const toggleClassTarget = (className: string) => {
     setForm((f: any) => {
@@ -1940,6 +2661,10 @@ function TutorAssignments({ classes }: { classes: any[] }) {
         try {
           await assignmentsApi.delete(id)
           setItems((prev) => prev.filter((x: any) => x.id !== id))
+          if (id === selectedAssignmentId) {
+            setAssignmentModalOpen(false)
+            setSelectedAssignmentId('')
+          }
           notify.success('Assignment deleted')
         } catch (e: any) {
           notify.error(e?.message || 'Failed to delete assignment')
@@ -1960,6 +2685,136 @@ function TutorAssignments({ classes }: { classes: any[] }) {
         onClose={() => setConfirm(null)}
         onConfirm={() => confirm?.onConfirm?.()}
       />
+      <Modal
+        open={assignmentModalOpen && !!selectedAssignmentId}
+        onClose={() => setAssignmentModalOpen(false)}
+        title={selectedAssignment ? `Submissions · ${selectedAssignment.title}` : 'Assignment'}
+        panelMaxWidth={1080}
+      >
+        {selectedAssignment && (
+          <>
+            <div className="text-muted text-sm" style={{ marginBottom: 12, lineHeight: 1.5 }}>
+              {selectedAssignment.className}
+              {(() => {
+                const tr = classOptions.find((c) => c.className === selectedAssignment.className)?.track || ''
+                return tr ? ` · ${String(tr).replace('TRACK_', 'Track ')}` : ''
+              })()}
+              {selectedAssignment.dueDate ? ` · Due ${new Date(selectedAssignment.dueDate).toLocaleString('en-NG')}` : ''}
+              {selectedAssignment.maxScore != null ? ` · Max score ${selectedAssignment.maxScore}` : ''}
+            </div>
+            {selectedAssignment.description ? (
+              <p className="text-sm" style={{ color: 'var(--white2)', marginBottom: 12, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {selectedAssignment.description}
+              </p>
+            ) : null}
+            {selectedAssignment.attachmentUrl ? (
+              <p className="text-sm" style={{ marginBottom: 14 }}>
+                <a href={selectedAssignment.attachmentUrl} target="_blank" rel="noreferrer" className="text-teal">
+                  Download assignment file
+                </a>
+              </p>
+            ) : null}
+          </>
+        )}
+        {loadingAssignmentSubmissions ? (
+          <p className="text-muted text-sm">Loading submissions…</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {assignmentSubmissions.map((s: any) => {
+              const studentLabel = s.student
+                ? `${s.student.user?.firstName || ''} ${s.student.user?.lastName || ''}`.trim() || s.studentId
+                : s.studentId
+              const graded = s.score != null && s.score !== undefined
+              return (
+                <div
+                  key={s.id}
+                  style={{
+                    border: '1px solid var(--border2)',
+                    borderRadius: 12,
+                    padding: 12,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    background: 'var(--muted3)',
+                  }}
+                >
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontWeight: 600, color: 'var(--white)', wordBreak: 'break-word' }}>{studentLabel}</span>
+                    <span className={`badge badge-${graded ? 'success' : s.status === 'LATE' ? 'warning' : 'info'}`} style={{ flexShrink: 0 }}>
+                      {graded ? 'GRADED' : s.status || 'SUBMITTED'}
+                    </span>
+                  </div>
+                  {s.fileUrl ? (
+                    <div className="text-sm">
+                      <span className="text-muted">File: </span>
+                      <a href={s.fileUrl} target="_blank" rel="noreferrer" className="text-teal">
+                        Open submission
+                      </a>
+                    </div>
+                  ) : null}
+                  {s.textBody ? (
+                    <div className="text-muted text-xs" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>
+                      {s.textBody}
+                    </div>
+                  ) : null}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label">Score (max {selectedAssignment?.maxScore ?? 100})</label>
+                      <input
+                        className="form-input"
+                        inputMode="decimal"
+                        value={asgScoreById[s.id] ?? ''}
+                        onChange={(e) => setAsgScoreById((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label className="form-label">Feedback</label>
+                      <input
+                        className="form-input"
+                        value={asgFeedbackById[s.id] ?? ''}
+                        onChange={(e) => setAsgFeedbackById((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => gradeAssignmentSubmission(s.id)} disabled={gradingAssignment}>
+                      Save grade
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+            {assignmentSubmissions.length === 0 && (
+              <p className="text-muted text-sm" style={{ textAlign: 'center', padding: '20px 8px' }}>
+                No submissions yet for this assignment.
+              </p>
+            )}
+          </div>
+        )}
+        <div
+          style={{
+            marginTop: 20,
+            paddingTop: 16,
+            borderTop: '1px solid var(--border2)',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 10,
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAssignmentModalOpen(false)}>
+            Close
+          </button>
+          {selectedAssignment ? (
+            <button type="button" className="btn btn-danger btn-sm" onClick={() => remove(selectedAssignment.id)}>
+              Delete assignment
+            </button>
+          ) : null}
+        </div>
+      </Modal>
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Assignments</h3>
@@ -2039,30 +2894,53 @@ function TutorAssignments({ classes }: { classes: any[] }) {
         </div>
       )}
 
-      {loading ? <p className="text-muted text-sm" style={{ padding: 20 }}>Loading assignments…</p> : (
+      {loading ? (
+        <p className="text-muted text-sm" style={{ padding: 20 }}>
+          Loading assignments…
+        </p>
+      ) : (
         <div className="card">
-          <table className="data-table">
-            <thead><tr><th>Title</th><th>Class</th><th>Track</th><th>Due</th><th>Submissions</th><th>Action</th></tr></thead>
-            <tbody>
-              {items.map((a: any) => {
-                const classTrack = classOptions.find((c) => c.className === a.className)?.track || ''
-                return (
-                  <tr key={a.id}>
-                    <td>
-                      <div style={{fontWeight:600,color:'var(--white)'}}>{a.title}</div>
-                      <div style={{fontSize:12,color:'var(--muted)'}}>{a.description}</div>
-                    </td>
-                    <td>{a.className}</td>
-                    <td>{classTrack ? String(classTrack).replace('TRACK_', 'Track ') : '—'}</td>
-                    <td>{a.dueDate ? new Date(a.dueDate).toLocaleString('en-NG') : '—'}</td>
-                    <td>{a._count?.submissions ?? 0}</td>
-                    <td><button onClick={() => remove(a.id)} className="btn btn-danger btn-sm" style={{fontSize:11,padding:'4px 8px'}}>Delete</button></td>
-                  </tr>
-                )
-              })}
-              {items.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No assignments yet.</td></tr>}
-            </tbody>
-          </table>
+          <div className="font-display fw-600 text-white mb-8">Your assignments</div>
+          <p className="text-muted text-sm mb-16" style={{ lineHeight: 1.5 }}>
+            Open an assignment to review submissions and enter grades on any screen size. Delete is available inside the panel.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {items.map((a: any) => {
+              const classTrack = classOptions.find((c) => c.className === a.className)?.track || ''
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => openAssignmentModal(a.id)}
+                  className="btn btn-ghost btn-sm"
+                  style={{
+                    justifyContent: 'space-between',
+                    textAlign: 'left',
+                    border: selectedAssignmentId === a.id ? '1px solid var(--gold)' : '1px solid var(--border2)',
+                    padding: '10px 12px',
+                  }}
+                >
+                  <div style={{ minWidth: 0, paddingRight: 8 }}>
+                    <div style={{ color: 'var(--white)', fontWeight: 600, wordBreak: 'break-word' }}>{a.title}</div>
+                    <div className="text-muted text-xs" style={{ marginTop: 4 }}>
+                      {a.className}
+                      {classTrack ? ` · ${String(classTrack).replace('TRACK_', 'Track ')}` : ''}
+                      {a.dueDate ? ` · Due ${new Date(a.dueDate).toLocaleString('en-NG')}` : ''}
+                    </div>
+                    {a.description ? (
+                      <div className="text-muted text-xs" style={{ marginTop: 6, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        {a.description}
+                      </div>
+                    ) : null}
+                  </div>
+                  <span className="badge badge-info" style={{ flexShrink: 0 }}>
+                    {a._count?.submissions ?? 0}
+                  </span>
+                </button>
+              )
+            })}
+            {items.length === 0 && <div className="text-muted text-sm">No assignments yet.</div>}
+          </div>
         </div>
       )}
     </div>
@@ -2076,15 +2954,19 @@ function TutorPracticals({ classes }: { classes: any[] }) {
   const [showNew, setShowNew] = useState(false)
   const [savingTask, setSavingTask] = useState(false)
   const [selectedTaskId, setSelectedTaskId] = useState('')
+  const [submissionsModalOpen, setSubmissionsModalOpen] = useState(false)
   const [submissions, setSubmissions] = useState<any[]>([])
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
   const [grading, setGrading] = useState(false)
+  const [aiGradingId, setAiGradingId] = useState<string | null>(null)
+  const [aiReviewQueue, setAiReviewQueue] = useState<any[]>([])
   const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
   const [scoreBySubmission, setScoreBySubmission] = useState<Record<string, string>>({})
   const [feedbackBySubmission, setFeedbackBySubmission] = useState<Record<string, string>>({})
   const [selectedSubmissionIds, setSelectedSubmissionIds] = useState<string[]>([])
   const [bulkScore, setBulkScore] = useState('')
   const [bulkFeedback, setBulkFeedback] = useState('')
+  const selectedTask = useMemo(() => tasks.find((t: any) => t.id === selectedTaskId) || null, [tasks, selectedTaskId])
   const classOptions = Array.from(
     new Map(
       (Array.isArray(classes) ? classes : [])
@@ -2139,6 +3021,9 @@ function TutorPracticals({ classes }: { classes: any[] }) {
   }, [])
 
   useEffect(() => { loadTasks() }, [loadTasks])
+  useEffect(() => {
+    practicalsApi.aiReviewQueue().then((rows) => setAiReviewQueue(Array.isArray(rows) ? rows : [])).catch(() => setAiReviewQueue([]))
+  }, [tasks.length, submissions.length])
   useEffect(() => {
     if (!trackChoices.length) return
     if (!form.track || !trackChoices.some((t) => t.code === form.track)) {
@@ -2254,6 +3139,7 @@ function TutorPracticals({ classes }: { classes: any[] }) {
 
   const openTask = async (taskId: string) => {
     setSelectedTaskId(taskId)
+    setSubmissionsModalOpen(true)
     setSelectedSubmissionIds([])
     setBulkScore('')
     setBulkFeedback('')
@@ -2280,8 +3166,46 @@ function TutorPracticals({ classes }: { classes: any[] }) {
     try {
       await practicalsApi.grade(submissionId, { totalScore, feedback: feedbackBySubmission[submissionId] || '' })
       if (selectedTaskId) await openTask(selectedTaskId)
+      const queue = await practicalsApi.aiReviewQueue().catch(() => [])
+      setAiReviewQueue(Array.isArray(queue) ? queue : [])
     } catch (e: any) {
       notify.error(e?.message || 'Failed to grade submission')
+    }
+    setGrading(false)
+  }
+
+  const runAiGrade = async (submissionId: string) => {
+    setAiGradingId(submissionId)
+    try {
+      const updated = await practicalsApi.aiGrade(submissionId)
+      if (updated?.aiProposedScore != null) {
+        setScoreBySubmission((prev) => ({ ...prev, [submissionId]: String(updated.aiProposedScore) }))
+        setFeedbackBySubmission((prev) => ({ ...prev, [submissionId]: updated.aiProposedFeedback || '' }))
+        setSubmissions((rows) => rows.map((s: any) => (s.id === submissionId ? { ...s, ...updated } : s)))
+      }
+      const queue = await practicalsApi.aiReviewQueue().catch(() => [])
+      setAiReviewQueue(Array.isArray(queue) ? queue : [])
+      notify.success('AI grade proposed — review and approve or override')
+    } catch (e: any) {
+      notify.error(e?.message || 'AI grading failed')
+    }
+    setAiGradingId(null)
+  }
+
+  const approveAiGrade = async (submissionId: string) => {
+    setGrading(true)
+    try {
+      const totalScore = Number(scoreBySubmission[submissionId])
+      await practicalsApi.approveAiGrade(submissionId, {
+        totalScore: Number.isFinite(totalScore) ? totalScore : undefined,
+        feedback: feedbackBySubmission[submissionId] || undefined,
+      })
+      if (selectedTaskId) await openTask(selectedTaskId)
+      const queue = await practicalsApi.aiReviewQueue().catch(() => [])
+      setAiReviewQueue(Array.isArray(queue) ? queue : [])
+      notify.success('AI grade approved')
+    } catch (e: any) {
+      notify.error(e?.message || 'Failed to approve AI grade')
     }
     setGrading(false)
   }
@@ -2336,6 +3260,165 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         onClose={() => setConfirm(null)}
         onConfirm={() => confirm?.onConfirm?.()}
       />
+      <Modal
+        open={submissionsModalOpen && !!selectedTaskId}
+        onClose={() => setSubmissionsModalOpen(false)}
+        title={selectedTask ? `Submissions · ${selectedTask.title}` : 'Submissions'}
+        panelMaxWidth={1080}
+      >
+        {selectedTask && (
+          <div className="text-muted text-sm" style={{ marginBottom: 14, lineHeight: 1.5 }}>
+            {selectedTask.className}
+            {selectedTask.module ? ` · Module ${selectedTask.module.number}` : ''}
+            {selectedTask.dueDate ? ` · Due ${new Date(selectedTask.dueDate).toLocaleString('en-NG')}` : ''}
+          </div>
+        )}
+        {loadingSubmissions ? (
+          <p className="text-muted text-sm">Loading submissions…</p>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end', marginBottom: 16 }}>
+              <div style={{ flex: '1 1 120px', minWidth: 0 }}>
+                <label className="form-label">Bulk score</label>
+                <input type="number" className="form-input" placeholder="e.g. 75" value={bulkScore} onChange={(e) => setBulkScore(e.target.value)} />
+              </div>
+              <div style={{ flex: '2 1 220px', minWidth: 0 }}>
+                <label className="form-label">Bulk feedback (optional)</label>
+                <input className="form-input" placeholder="Feedback for all selected" value={bulkFeedback} onChange={(e) => setBulkFeedback(e.target.value)} />
+              </div>
+              <div style={{ flex: '0 0 auto' }}>
+                <button type="button" className="btn btn-primary btn-sm" onClick={applyBulkGrade} disabled={grading}>
+                  {grading ? 'Applying…' : 'Bulk grade'}
+                </button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {submissions.map((s: any) => {
+                const studentLabel = s.student
+                  ? `${s.student.user?.firstName || ''} ${s.student.user?.lastName || ''}`.trim() || s.studentId
+                  : s.studentId
+                return (
+                  <div
+                    key={s.id}
+                    style={{
+                      border: '1px solid var(--border2)',
+                      borderRadius: 12,
+                      padding: 12,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                      background: 'var(--muted3)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, flex: '1 1 auto' }}>
+                        <input type="checkbox" checked={selectedSubmissionIds.includes(s.id)} onChange={() => toggleSubmission(s.id)} style={{ accentColor: 'var(--teal)', flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600, color: 'var(--white)', wordBreak: 'break-word' }}>{studentLabel}</span>
+                        <span className="badge badge-info" title="Submission attempt (retakes create a new attempt)">
+                          #{s.attempt ?? 1}
+                        </span>
+                      </label>
+                      <span
+                        className={`badge badge-${s.status === 'PASSED' ? 'success' : s.status === 'REWORK_REQUIRED' ? 'warning' : 'info'}`}
+                        style={{ flexShrink: 0 }}
+                      >
+                        {s.status}
+                      </span>
+                    </div>
+                    <div className="text-sm" style={{ wordBreak: 'break-word' }}>
+                      <span className="text-muted">Evidence: </span>
+                      {s.evidenceUrl ? (
+                        <a href={s.evidenceUrl} target="_blank" rel="noreferrer" className="text-teal" style={{ color: 'var(--teal2)' }}>
+                          Open link
+                        </a>
+                      ) : (
+                        '—'
+                      )}
+                      {s.evidenceText ? (
+                        <div className="text-muted text-xs" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
+                          {s.evidenceText}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <label className="form-label">Score</label>
+                        <input
+                          className="form-input"
+                          inputMode="decimal"
+                          value={scoreBySubmission[s.id] ?? ''}
+                          onChange={(e) => setScoreBySubmission((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <label className="form-label">Feedback</label>
+                        <input
+                          className="form-input"
+                          value={feedbackBySubmission[s.id] ?? ''}
+                          onChange={(e) => setFeedbackBySubmission((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                    </div>
+                    {s.aiProposedScore != null && s.gradedAt == null && (
+                      <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(212,168,83,0.08)', border: '1px solid rgba(212,168,83,0.25)' }}>
+                        <div className="text-xs text-muted mb-4">AI proposal{s.aiConfidence != null ? ` · confidence ${Math.round(s.aiConfidence * 100)}%` : ''}</div>
+                        <div className="text-sm" style={{ color: 'var(--white)' }}>
+                          Score {s.aiProposedScore}/{selectedTask?.maxScore || 100}
+                          {s.aiProposedFeedback && <span className="text-muted"> — {s.aiProposedFeedback}</span>}
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => runAiGrade(s.id)} disabled={aiGradingId === s.id || grading}>
+                        {aiGradingId === s.id ? 'AI grading…' : 'AI suggest grade'}
+                      </button>
+                      {s.aiProposedScore != null && s.gradedAt == null && (
+                        <button type="button" className="btn btn-success btn-sm" onClick={() => approveAiGrade(s.id)} disabled={grading}>
+                          Approve AI grade
+                        </button>
+                      )}
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => gradeOne(s.id)} disabled={grading}>
+                        Save grade
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+              {submissions.length === 0 && (
+                <p className="text-muted text-sm" style={{ textAlign: 'center', padding: '24px 8px' }}>
+                  No submissions yet for this task.
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </Modal>
+      {aiReviewQueue.length > 0 && (
+        <div className="card mb-20" style={{ borderColor: 'rgba(212,168,83,0.4)', background: 'rgba(212,168,83,0.06)' }}>
+          <div className="font-display fw-600 text-white mb-6" style={{ fontSize: 15 }}>AI grading review queue</div>
+          <div className="text-muted text-sm mb-10">{aiReviewQueue.length} submission(s) have AI proposals awaiting your approval.</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {aiReviewQueue.slice(0, 5).map((s: any) => {
+              const label = s.student
+                ? `${s.student.user?.firstName || ''} ${s.student.user?.lastName || ''}`.trim()
+                : s.studentId
+              return (
+                <div key={s.id} className="flex-between" style={{ gap: 10, flexWrap: 'wrap' }}>
+                  <span className="text-sm" style={{ color: 'var(--white)' }}>
+                    {s.task?.title} · {label} · AI {s.aiProposedScore}/{s.task?.maxScore || 100}
+                  </span>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.task?.id && openTask(s.task.id)}>
+                    Review →
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Practical Assessments</h3>
@@ -2397,61 +3480,31 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         </div>
       )}
 
-      <div className="content-grid" style={{ gridTemplateColumns: '1.1fr 1fr' }}>
-        <div className="card">
-          <div className="font-display fw-600 text-white mb-16">Practical Tasks</div>
-          {loadingTasks ? <p className="text-muted text-sm">Loading tasks…</p> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {tasks.map((t: any) => (
-                <button key={t.id} onClick={() => openTask(t.id)} className="btn btn-ghost btn-sm" style={{ justifyContent: 'space-between', textAlign: 'left', border: selectedTaskId === t.id ? '1px solid var(--gold)' : '1px solid var(--border2)', padding: '10px 12px' }}>
-                  <div>
-                    <div style={{ color: 'var(--white)', fontWeight: 600 }}>{t.title}</div>
-                    <div className="text-muted text-xs">{t.className} · {t.module ? `Module ${t.module.number}` : 'Module'} · Due {t.dueDate ? new Date(t.dueDate).toLocaleDateString('en-NG') : '—'}</div>
-                  </div>
-                  <span className="badge badge-info">{t._count?.submissions ?? 0}</span>
-                </button>
-              ))}
-              {tasks.length === 0 && <div className="text-muted text-sm">No practical tasks yet.</div>}
-            </div>
-          )}
-        </div>
-
-        <div className="card">
-          <div className="font-display fw-600 text-white mb-16">Submissions & Grading</div>
-          {!selectedTaskId ? (
-            <div className="text-muted text-sm">Select a practical task to view submissions.</div>
-          ) : loadingSubmissions ? (
-            <div className="text-muted text-sm">Loading submissions…</div>
-          ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: 8, marginBottom: 10 }}>
-                <input type="number" className="form-input" placeholder="Bulk score" value={bulkScore} onChange={(e) => setBulkScore(e.target.value)} />
-                <input className="form-input" placeholder="Bulk feedback (optional)" value={bulkFeedback} onChange={(e) => setBulkFeedback(e.target.value)} />
-                <button className="btn btn-primary btn-sm" onClick={applyBulkGrade} disabled={grading}>{grading ? 'Applying…' : 'Bulk Grade'}</button>
-              </div>
-              <table className="data-table">
-                <thead><tr><th></th><th>Student</th><th>Evidence</th><th>Score</th><th>Feedback</th><th>Status</th><th>Action</th></tr></thead>
-                <tbody>
-                  {submissions.map((s: any) => (
-                    <tr key={s.id}>
-                      <td><input type="checkbox" checked={selectedSubmissionIds.includes(s.id)} onChange={() => toggleSubmission(s.id)} /></td>
-                      <td>{s.student ? `${s.student.user?.firstName || ''} ${s.student.user?.lastName || ''}`.trim() : s.studentId}</td>
-                      <td>
-                        {s.evidenceUrl ? <a href={s.evidenceUrl} target="_blank" rel="noreferrer">Open</a> : '—'}
-                        {s.evidenceText ? <div className="text-muted text-xs">{s.evidenceText.slice(0, 60)}{s.evidenceText.length > 60 ? '…' : ''}</div> : null}
-                      </td>
-                      <td><input className="form-input" style={{ width: 84 }} value={scoreBySubmission[s.id] ?? ''} onChange={(e) => setScoreBySubmission((prev) => ({ ...prev, [s.id]: e.target.value }))} /></td>
-                      <td><input className="form-input" value={feedbackBySubmission[s.id] ?? ''} onChange={(e) => setFeedbackBySubmission((prev) => ({ ...prev, [s.id]: e.target.value }))} /></td>
-                      <td><span className={`badge badge-${s.status === 'PASSED' ? 'success' : s.status === 'REWORK_REQUIRED' ? 'warning' : 'info'}`}>{s.status}</span></td>
-                      <td><button className="btn btn-ghost btn-sm" onClick={() => gradeOne(s.id)} disabled={grading}>Grade</button></td>
-                    </tr>
-                  ))}
-                  {submissions.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: '22px 0' }}>No submissions yet for this task.</td></tr>}
-                </tbody>
-              </table>
-            </>
-          )}
-        </div>
+      <div className="card">
+        <div className="font-display fw-600 text-white mb-8">Practical Tasks</div>
+        <p className="text-muted text-sm mb-16" style={{ lineHeight: 1.5 }}>
+          Select a task to open submissions and grading in a full-screen friendly panel (works on phones and desktops).
+        </p>
+        {loadingTasks ? <p className="text-muted text-sm">Loading tasks…</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {tasks.map((t: any) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => openTask(t.id)}
+                className="btn btn-ghost btn-sm"
+                style={{ justifyContent: 'space-between', textAlign: 'left', border: selectedTaskId === t.id ? '1px solid var(--gold)' : '1px solid var(--border2)', padding: '10px 12px' }}
+              >
+                <div style={{ minWidth: 0, paddingRight: 8 }}>
+                  <div style={{ color: 'var(--white)', fontWeight: 600, wordBreak: 'break-word' }}>{t.title}</div>
+                  <div className="text-muted text-xs">{t.className} · {t.module ? `Module ${t.module.number}` : 'Module'} · Due {t.dueDate ? new Date(t.dueDate).toLocaleDateString('en-NG') : '—'}</div>
+                </div>
+                <span className="badge badge-info" style={{ flexShrink: 0 }}>{t._count?.submissions ?? 0}</span>
+              </button>
+            ))}
+            {tasks.length === 0 && <div className="text-muted text-sm">No practical tasks yet.</div>}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -2599,6 +3652,11 @@ function TutorMessages({ classes }: { classes: any[] }) {
 function CBTBuilder({ classes }: { classes: any[] }) {
   const [view, setView] = useState<'list' | 'create'>('list')
   const [exams, setExams] = useState<any[]>([])
+  const [selectedCbtClassKey, setSelectedCbtClassKey] = useState<string | null>(null)
+  const [attemptsByExamId, setAttemptsByExamId] = useState<Record<string, any[]>>({})
+  const [attemptsLoading, setAttemptsLoading] = useState(false)
+  const [scoresModal, setScoresModal] = useState<null | { title: string; totalQuestions: number; classLabel: string }>(null)
+  const [scoresRows, setScoresRows] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState('')
@@ -2652,14 +3710,18 @@ function CBTBuilder({ classes }: { classes: any[] }) {
     loadModules()
   }, [form.track, form.className, view, JSON.stringify(classes.map((c: any) => `${c.className}:${c.track3Stack || ''}`))])
   const selectedModule = modulesForTrack.find((m: any) => m.id === form.moduleId)
-  const isExamModule = selectedModule?.moduleType === 'TERM_EXAM'
+  const isTermlyModule = selectedModule?.moduleType === 'TERM_EXAM'
+  const isCompletionExamModule = selectedModule?.moduleType === 'TRACK_COMPLETION_EXAM'
+  const isCombinedExamModule = isTermlyModule || isCompletionExamModule
   const normalMods = modulesForTrack
-    .filter((m: any) => m.moduleType !== 'TERM_EXAM')
+    .filter((m: any) => m.moduleType === 'STANDARD' || !m.moduleType)
     .sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
   const generatedTitle = selectedModule
-    ? isExamModule
-      ? `Term ${selectedModule.termOrdinal || ''} Main CBT Exam — ${String(form.track || '').replace('TRACK_', 'Track ')}`
-      : `Module ${selectedModule.number}: ${selectedModule.title} Assessment`
+    ? isCompletionExamModule
+      ? `${String(form.track || '').replace('TRACK_', 'Track ')} Completion Exam`
+      : isTermlyModule
+        ? `Term ${selectedModule.termOrdinal || ''} Termly Assessment — ${String(form.track || '').replace('TRACK_', 'Track ')}`
+        : `Module ${selectedModule.number}: ${selectedModule.title} Assessment`
     : ''
   useEffect(() => {
     if (view !== 'create') return
@@ -2668,10 +3730,10 @@ function CBTBuilder({ classes }: { classes: any[] }) {
     }
   }, [generatedTitle, view])
 
-  // Prefill sensible defaults for term exam modules
+  // Prefill sensible defaults for termly / completion exam modules
   useEffect(() => {
     if (view !== 'create') return
-    if (!isExamModule) return
+    if (!isCombinedExamModule) return
     setForm((prev: any) => ({
       ...prev,
       durationMins: prev.durationMins && prev.durationMins !== 30 ? prev.durationMins : 60,
@@ -2680,28 +3742,37 @@ function CBTBuilder({ classes }: { classes: any[] }) {
           ? prev.questions
           : [{ q: '', options: ['', '', '', ''], correct: 0, explanation: '' }],
     }))
-  }, [isExamModule, view, selectedModule?.id])
+  }, [isCombinedExamModule, view, selectedModule?.id])
 
-  // Default module inclusion for AI when term exam is selected
+  // Default module inclusion for AI when termly / completion exam is selected
   useEffect(() => {
     if (view !== 'create') return
-    if (!isExamModule) {
+    if (!isCombinedExamModule) {
       setAiInclude({})
       return
     }
     const next: Record<string, boolean> = {}
     normalMods.forEach((m: any) => { next[m.id] = true })
     setAiInclude(next)
-  }, [isExamModule, view, selectedModule?.id, JSON.stringify(normalMods.map((m: any) => m.id))])
+  }, [isCombinedExamModule, view, selectedModule?.id, JSON.stringify(normalMods.map((m: any) => m.id))])
 
   const runAi = async () => {
     if (!form.moduleId) {
       notify.warning('Select a module first')
       return
     }
+    if (isCombinedExamModule) {
+      const selected = Object.entries(aiInclude).filter(([, v]) => v).map(([k]) => k)
+      if (!selected.length) {
+        notify.warning(isCompletionExamModule
+          ? 'Select at least one standard module to include in the completion exam'
+          : 'Select at least one module covered this term')
+        return
+      }
+    }
     setAiGenerating(true)
     try {
-      const includeModuleIds = isExamModule
+      const includeModuleIds = isCombinedExamModule
         ? Object.entries(aiInclude).filter(([, v]) => v).map(([k]) => k)
         : undefined
       const res = await cbtApi.generateQuestions({
@@ -2745,11 +3816,22 @@ function CBTBuilder({ classes }: { classes: any[] }) {
         setSaving(false)
         return
       }
+      const coveredModuleIds = isCombinedExamModule
+        ? Object.entries(aiInclude).filter(([, v]) => v).map(([k]) => k)
+        : undefined
+      if (isCombinedExamModule && (!coveredModuleIds || !coveredModuleIds.length)) {
+        notify.warning(isCompletionExamModule
+          ? 'Select at least one standard module for the completion exam'
+          : 'Select at least one module covered this term')
+        setSaving(false)
+        return
+      }
       const newExam = await cbtApi.create({
         title: form.title || generatedTitle,
         moduleId: form.moduleId,
         track: form.track,
         durationMins: form.durationMins,
+        ...(coveredModuleIds?.length ? { coveredModuleIds } : {}),
         questions: form.questions.map((q, i) => ({ questionText: q.q, options: q.options, correctIndex: q.correct, explanation: q.explanation, number: i + 1 })),
       })
       setExams(ex => [newExam, ...ex])
@@ -2762,6 +3844,104 @@ function CBTBuilder({ classes }: { classes: any[] }) {
     if (e.isVetted && e.isPublished) return { label: 'Approved · Live', bg: 'rgba(34,197,94,0.15)', color: '#4ADE80', border: 'rgba(34,197,94,0.3)' }
     if (e.isVetted) return { label: 'Vetted · Unpublished', bg: 'rgba(26,127,212,0.15)', color: 'var(--teal2)', border: 'rgba(26,127,212,0.3)' }
     return { label: 'Awaiting Approval', bg: 'rgba(245,158,11,0.15)', color: '#FCD34D', border: 'rgba(245,158,11,0.3)' }
+  }
+
+  const classKey = useCallback((schoolId: string, className: string) => `${String(schoolId).trim()}::${String(className).trim()}`, [])
+
+  const cbtPageClassCards = useMemo(() => {
+    const seen = new Set<string>()
+    const cards: { key: string; className: string; schoolId: string; track: string; schoolName: string }[] = []
+    for (const c of Array.isArray(classes) ? classes : []) {
+      const schoolId = String(c.schoolId || c.school?.id || '').trim()
+      const className = String(c.className || '').trim()
+      if (!schoolId || !className) continue
+      const key = classKey(schoolId, className)
+      if (seen.has(key)) continue
+      seen.add(key)
+      cards.push({
+        key,
+        className,
+        schoolId,
+        track: String(c.track || '').trim() || '—',
+        schoolName: String(c.school?.name || '').trim() || 'School',
+      })
+    }
+    cards.sort((a, b) => a.className.localeCompare(b.className) || a.schoolName.localeCompare(b.schoolName))
+    return cards
+  }, [classes, classKey])
+
+  const attemptsCountByClass = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const rows of Object.values(attemptsByExamId)) {
+      for (const a of rows) {
+        const k = classKey(String(a.student?.schoolId || ''), String(a.student?.className || ''))
+        if (k === '::') continue
+        m[k] = (m[k] || 0) + 1
+      }
+    }
+    return m
+  }, [attemptsByExamId, classKey])
+
+  const examIdsKey = useMemo(() => [...exams].map((e: any) => e.id).sort().join(','), [exams])
+
+  useEffect(() => {
+    if (view !== 'list' || !exams.length) {
+      setAttemptsByExamId({})
+      setAttemptsLoading(false)
+      return
+    }
+    let cancelled = false
+    setAttemptsLoading(true)
+    ;(async () => {
+      const entries = await Promise.all(
+        exams.map(async (ex: any) => {
+          try {
+            const rows = await cbtApi.attempts(ex.id)
+            return [ex.id, Array.isArray(rows) ? rows : []] as const
+          } catch {
+            return [ex.id, []] as const
+          }
+        }),
+      )
+      if (cancelled) return
+      const m: Record<string, any[]> = {}
+      for (const [id, rows] of entries) m[id] = [...rows]
+      setAttemptsByExamId(m)
+      setAttemptsLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [view, examIdsKey])
+
+  const selectedClassLabel = useMemo(() => {
+    if (!selectedCbtClassKey) return ''
+    const c = cbtPageClassCards.find((x) => x.key === selectedCbtClassKey)
+    if (!c) return selectedCbtClassKey
+    const tr = c.track && c.track !== '—' ? c.track.replace(/^TRACK_/i, 'Track ') + ' · ' : ''
+    return `${c.className} · ${tr}${c.schoolName}`.replace(/ · $/, '')
+  }, [selectedCbtClassKey, cbtPageClassCards])
+
+  const completedInSelectedClass = (examId: string) => {
+    if (!selectedCbtClassKey) return 0
+    const rows = attemptsByExamId[examId] || []
+    return rows.filter(
+      (row: any) => classKey(row.student?.schoolId || '', row.student?.className || '') === selectedCbtClassKey,
+    ).length
+  }
+
+  const openScoresDetailModal = (exam: any) => {
+    if (!selectedCbtClassKey) return
+    const all = attemptsByExamId[exam.id] || []
+    const filtered = all.filter(
+      (row: any) => classKey(row.student?.schoolId || '', row.student?.className || '') === selectedCbtClassKey,
+    )
+    setScoresRows(filtered)
+    setScoresModal({
+      title: exam.title || 'Assessment',
+      totalQuestions: Number(exam.totalQuestions ?? exam._count?.questions ?? 0) || 0,
+      classLabel: selectedClassLabel,
+    })
   }
 
   if (view === 'create') return (
@@ -2790,19 +3970,27 @@ function CBTBuilder({ classes }: { classes: any[] }) {
               >
                 <option value="">{loadingModules ? 'Loading modules…' : 'Select module…'}</option>
                 {(() => {
-                  const examMods = modulesForTrack.filter((m: any) => m.moduleType === 'TERM_EXAM').sort((a: any, b: any) => (a.termOrdinal || 0) - (b.termOrdinal || 0))
-                  const normalMods = modulesForTrack.filter((m: any) => m.moduleType !== 'TERM_EXAM').sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
+                  const termlyMods = modulesForTrack.filter((m: any) => m.moduleType === 'TERM_EXAM').sort((a: any, b: any) => (a.termOrdinal || 0) - (b.termOrdinal || 0))
+                  const completionMods = modulesForTrack.filter((m: any) => m.moduleType === 'TRACK_COMPLETION_EXAM')
+                  const standardMods = modulesForTrack.filter((m: any) => m.moduleType === 'STANDARD' || !m.moduleType).sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
                   return (
                     <>
-                      {examMods.length > 0 && (
-                        <optgroup label="Term Exams">
-                          {examMods.map((m: any) => (
+                      {completionMods.length > 0 && (
+                        <optgroup label="Track completion (certificate gate)">
+                          {completionMods.map((m: any) => (
+                            <option key={m.id} value={m.id}>{m.title}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {termlyMods.length > 0 && (
+                        <optgroup label="Termly assessments (optional)">
+                          {termlyMods.map((m: any) => (
                             <option key={m.id} value={m.id}>{`Term ${m.termOrdinal}: ${m.title}`}</option>
                           ))}
                         </optgroup>
                       )}
-                      <optgroup label="Modules">
-                        {normalMods.map((m: any) => (
+                      <optgroup label="Standard modules">
+                        {standardMods.map((m: any) => (
                           <option key={m.id} value={m.id}>{`Module ${m.number}: ${m.title}`}</option>
                         ))}
                       </optgroup>
@@ -2833,9 +4021,13 @@ function CBTBuilder({ classes }: { classes: any[] }) {
               {aiGenerating ? 'Generating…' : 'Generate with AI'}
             </button>
           </div>
-          {isExamModule && normalMods.length > 0 && (
+          {isCombinedExamModule && normalMods.length > 0 && (
             <div className="mt-12" style={{ borderTop: '1px solid var(--border2)', paddingTop: 12 }}>
-              <div className="text-muted text-xs mb-8">Exam module: select which modules to include for AI generation.</div>
+              <div className="text-muted text-xs mb-8">
+                {isCompletionExamModule
+                  ? 'Standard modules included in this track completion exam (AI scope + exam record).'
+                  : 'Modules covered this term — used for AI question scope and saved on the exam record.'}
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 8 }}>
                 {normalMods.map((m: any) => (
                   <label key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 10px', border: '1px solid var(--border2)', borderRadius: 8, background: 'var(--muted3)', cursor: 'pointer' }}>
@@ -2877,27 +4069,208 @@ function CBTBuilder({ classes }: { classes: any[] }) {
 
   return (
     <div>
-      <div className="card mb-20"><div className="flex-between mb-4"><div><div className="font-display fw-700 text-white mb-4" style={{ fontSize: 18 }}>CBT Assessment Builder</div><div className="text-muted text-sm">Create, manage & submit assessments for student testing</div></div><button onClick={() => { setView('create'); setSaved('') }} className="btn btn-primary btn-sm">+ New Assessment</button></div></div>
-      {saved && <div style={{ background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, padding: '10px 16px', marginBottom: 16, fontSize: 13, color: '#4ADE80' }}>✓ Assessment submitted for vetting by Super Admin</div>}
-      {loading ? <p className="text-muted text-sm" style={{ padding: 20 }}>Loading assessments…</p> : (
-        <div className="card">
+      <Modal
+        open={!!scoresModal}
+        onClose={() => {
+          setScoresModal(null)
+          setScoresRows([])
+        }}
+        title={
+          scoresModal
+            ? `${scoresModal.title} — ${scoresModal.classLabel}`
+            : 'CBT scores'
+        }
+        panelMaxWidth={640}
+      >
+        <p className="text-muted text-sm" style={{ marginBottom: 12, lineHeight: 1.5 }}>
+          Completed attempts for this class. Score is percentage correct; the same student may appear more than once after retakes.
+        </p>
+        {scoresRows.length === 0 ? (
+          <p className="text-muted text-sm">No completed attempts for this assessment in this class yet.</p>
+        ) : (
           <table className="data-table">
-            <thead><tr><th>Title</th><th>Track</th><th>Questions</th><th>Duration</th><th>Status</th><th>Action</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Reg. no.</th>
+                <th>Score</th>
+                <th>Correct</th>
+                <th>Submitted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scoresRows.map((row: any) => {
+                const u = row.student?.user
+                const name = [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim() || '—'
+                const total = scoresModal?.totalQuestions ?? 0
+                const correct = typeof row.totalCorrect === 'number' ? row.totalCorrect : null
+                const pct = typeof row.score === 'number' ? Math.round(row.score) : null
+                const sub = row.submittedAt ? new Date(row.submittedAt).toLocaleString() : '—'
+                return (
+                  <tr key={row.id}>
+                    <td><strong style={{ color: 'var(--white)' }}>{name}</strong></td>
+                    <td className="text-muted text-sm">{row.student?.regNumber || '—'}</td>
+                    <td>{pct !== null ? `${pct}%` : '—'}</td>
+                    <td className="text-muted text-sm">{correct !== null && total > 0 ? `${correct} / ${total}` : correct !== null ? String(correct) : '—'}</td>
+                    <td className="text-muted text-sm" style={{ whiteSpace: 'nowrap' }}>{sub}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </Modal>
+      <div className="card mb-20">
+        <div className="flex-between mb-4">
+          <div>
+            <div className="font-display fw-700 text-white mb-4" style={{ fontSize: 18 }}>CBT Assessment Builder</div>
+            <div className="text-muted text-sm">Create, manage & submit assessments for student testing</div>
+          </div>
+          <button type="button" onClick={() => { setView('create'); setSaved('') }} className="btn btn-primary btn-sm">+ New Assessment</button>
+        </div>
+      </div>
+      {saved && (
+        <div style={{ background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, padding: '10px 16px', marginBottom: 16, fontSize: 13, color: '#4ADE80' }}>
+          ✓ Assessment submitted for vetting by Super Admin
+        </div>
+      )}
+      <div className="card mb-20">
+        <div className="font-display fw-600 text-white mb-4" style={{ fontSize: 16 }}>Your classes</div>
+        <p className="text-muted text-sm mb-14" style={{ lineHeight: 1.5 }}>
+          Select a class to see your assessments and how many students in that class have completed each one. Use View more for the full score list.
+        </p>
+        {cbtPageClassCards.length === 0 ? (
+          <p className="text-muted text-sm">No class assignments yet. Once you are assigned to classes, they appear here.</p>
+        ) : (
+          <>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: 12,
+              }}
+            >
+              {cbtPageClassCards.map((card) => {
+                const n = attemptsCountByClass[card.key] ?? 0
+                const selected = selectedCbtClassKey === card.key
+                return (
+                  <button
+                    key={card.key}
+                    type="button"
+                    onClick={() => setSelectedCbtClassKey(card.key)}
+                    className="card"
+                    style={{
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      padding: '14px 16px',
+                      border: selected ? '2px solid var(--teal2)' : '1px solid var(--border2)',
+                      borderRadius: 12,
+                      background: selected ? 'rgba(26,127,212,0.12)' : 'var(--muted3)',
+                    }}
+                  >
+                    <div className="font-display fw-700 text-white" style={{ fontSize: 16, marginBottom: 6 }}>
+                      {card.className}
+                    </div>
+                    <div className="text-muted text-xs" style={{ marginBottom: 8, lineHeight: 1.35 }}>
+                      {card.schoolName}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                      <span className="badge badge-info" style={{ fontSize: 10 }}>
+                        {card.track === '—' ? '—' : card.track.replace(/^TRACK_/i, 'Track ')}
+                      </span>
+                      <span className="text-muted text-xs">
+                        {attemptsLoading ? '…' : `${n} completed ${n === 1 ? 'attempt' : 'attempts'} (all assessments)`}
+                      </span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            {attemptsLoading && cbtPageClassCards.length > 0 && (
+              <p className="text-muted text-xs mt-12">Loading result counts…</p>
+            )}
+          </>
+        )}
+      </div>
+      {!selectedCbtClassKey ? (
+        <div className="card text-muted text-sm" style={{ lineHeight: 1.55 }}>
+          Choose a class card above. A table of your assessments for that class will appear here.
+        </div>
+      ) : loading ? (
+        <p className="text-muted text-sm" style={{ padding: 20 }}>Loading assessments…</p>
+      ) : (
+        <div className="card">
+          <div className="flex-between mb-16" style={{ flexWrap: 'wrap', gap: 10 }}>
+            <div>
+              <div className="font-display fw-600 text-white" style={{ fontSize: 16 }}>Assessments for this class</div>
+              <div className="text-muted text-sm mt-4">{selectedClassLabel}</div>
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedCbtClassKey(null)}>
+              Clear selection
+            </button>
+          </div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Track</th>
+                <th>Questions</th>
+                <th>Duration</th>
+                <th>Status</th>
+                <th>Completed (class)</th>
+                <th>Action</th>
+              </tr>
+            </thead>
             <tbody>
               {exams.map((e: any) => {
                 const si = statusInfo(e)
+                const done = completedInSelectedClass(e.id)
                 return (
                   <tr key={e.id}>
                     <td><strong style={{ color: 'var(--white)' }}>{e.title}</strong></td>
                     <td><span className="badge badge-info">{e.track?.replace('TRACK_', 'Track ')}</span></td>
                     <td>{e.totalQuestions || e._count?.questions || 0}</td>
                     <td>{e.durationMins} min</td>
-                    <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, background: si.bg, color: si.color, border: `1px solid ${si.border}` }}>{si.label}</span></td>
-                    <td><button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }}>View</button></td>
+                    <td>
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '3px 10px',
+                          borderRadius: 20,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          background: si.bg,
+                          color: si.color,
+                          border: `1px solid ${si.border}`,
+                        }}
+                      >
+                        {si.label}
+                      </span>
+                    </td>
+                    <td className="text-muted text-sm">{attemptsLoading ? '…' : done}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 11 }}
+                        disabled={attemptsLoading || done === 0}
+                        onClick={() => openScoresDetailModal(e)}
+                      >
+                        View more
+                      </button>
+                    </td>
                   </tr>
                 )
               })}
-              {exams.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No assessments yet. Create your first one above.</td></tr>}
+              {exams.length === 0 && (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>
+                    No assessments yet. Create your first one above.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -3236,8 +4609,22 @@ function SessionLogger({ classes }: { classes: any[] }) {
   const [lessonsByModule, setLessonsByModule] = useState<Record<string, any[]>>({})
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
+  const [checkInSchool, setCheckInSchool] = useState('')
+  const [checkInBusy, setCheckInBusy] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const timerRef = useRef<any>(null)
+
+  const schoolOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: { schoolId: string; label: string }[] = []
+    for (const c of Array.isArray(classes) ? classes : []) {
+      const schoolId = String(c.schoolId || c.school?.id || '').trim()
+      if (!schoolId || seen.has(schoolId)) continue
+      seen.add(schoolId)
+      opts.push({ schoolId, label: String(c.school?.name || c.schoolName || 'School').trim() })
+    }
+    return opts
+  }, [classes])
 
   useEffect(() => {
     modulesApi
@@ -3336,9 +4723,44 @@ function SessionLogger({ classes }: { classes: any[] }) {
     } catch (e: any) { notify.fromError(e) }
   }
 
+  const checkInToday = async () => {
+    const schoolId = checkInSchool || schoolOptions[0]?.schoolId
+    if (!schoolId) {
+      notify.warning('No school assignment found')
+      return
+    }
+    setCheckInBusy(true)
+    try {
+      await tutorAttendanceApi.checkIn(schoolId)
+      notify.success('Checked in for today')
+    } catch (e: any) {
+      notify.fromError(e, 'Check-in failed')
+    }
+    setCheckInBusy(false)
+  }
+
   return (
     <div>
       <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Session Log</h3><div className="text-muted text-sm">Start a session for each class — tied to your school assignment. When a module has <strong>published curriculum lessons</strong>, you must pick the lesson you are delivering. Sessions anchor delivery and advance the class together.</div></div></div>
+      {schoolOptions.length > 0 && (
+        <div className="card mb-20" style={{ maxWidth: 520 }}>
+          <div className="font-display fw-600 text-white mb-8" style={{ fontSize: 14 }}>Daily check-in</div>
+          <p className="text-muted text-xs mb-12">Mark yourself present at a school before teaching (optional — admins can see this under Tutor delivery).</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
+            {schoolOptions.length > 1 && (
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <label className="form-label">School</label>
+                <select className="form-input" value={checkInSchool || schoolOptions[0]?.schoolId || ''} onChange={(e) => setCheckInSchool(e.target.value)} style={{ appearance: 'none' }}>
+                  {schoolOptions.map((o) => <option key={o.schoolId} value={o.schoolId}>{o.label}</option>)}
+                </select>
+              </div>
+            )}
+            <button type="button" className="btn btn-ghost btn-sm" disabled={checkInBusy} onClick={checkInToday}>
+              {checkInBusy ? 'Checking in…' : 'Check in today →'}
+            </button>
+          </div>
+        </div>
+      )}
       {active ? (
         <div style={{ background: 'linear-gradient(135deg,rgba(34,197,94,0.12),rgba(26,127,212,0.08))', border: '1px solid rgba(34,197,94,0.35)', borderRadius: 'var(--radius-lg)', padding: 28, marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>

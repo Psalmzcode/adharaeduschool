@@ -102,29 +102,41 @@ export class SessionsService {
       }
     }
 
-    // Close any open sessions for this tutor first
-    await this.prisma.sessionLog.updateMany({
-      where: { tutorId: tutorUserId, endedAt: null },
-      data: { endedAt: new Date(), durationMins: 0 },
-    });
+    const termLabelForRow =
+      (tutorAssignmentId
+        ? (
+            await this.prisma.tutorAssignment.findUnique({
+              where: { id: tutorAssignmentId },
+              select: { termLabel: true },
+            })
+          )?.termLabel
+        : null) || null;
 
-    return this.prisma.sessionLog.create({
-      data: {
-        tutorId: tutorUserId,
-        schoolId,
-        className,
-        track,
-        moduleTitle: data.moduleTitle,
-        notes: data.notes,
-        termLabel: (tutorAssignmentId
-          ? (await this.prisma.tutorAssignment.findUnique({ where: { id: tutorAssignmentId }, select: { termLabel: true } }))?.termLabel
-          : null) || null,
-        tutorAssignmentId,
-        moduleId,
-        lessonId,
-        startedAt: new Date(),
+    return await this.prisma.$transaction(
+      async (tx) => {
+        await tx.sessionLog.updateMany({
+          where: { tutorId: tutorUserId, endedAt: null },
+          data: { endedAt: new Date(), durationMins: 0 },
+        });
+
+        return tx.sessionLog.create({
+          data: {
+            tutorId: tutorUserId,
+            schoolId,
+            className,
+            track,
+            moduleTitle: data.moduleTitle,
+            notes: data.notes,
+            termLabel: termLabelForRow,
+            tutorAssignmentId,
+            moduleId,
+            lessonId,
+            startedAt: new Date(),
+          },
+        });
       },
-    });
+      { maxWait: 10_000, timeout: 30_000 },
+    );
   }
 
   async endSession(sessionId: string, studentsPresent?: number, notes?: string) {
@@ -135,18 +147,32 @@ export class SessionsService {
       studentsPresent !== undefined && studentsPresent !== null && !Number.isNaN(Number(studentsPresent))
         ? Math.max(0, Math.floor(Number(studentsPresent)))
         : session.studentsPresent ?? 0;
-    const updated = await this.prisma.sessionLog.update({
-      where: { id: sessionId },
-      data: { endedAt: new Date(), durationMins, studentsPresent: present, notes },
-    });
+    const { updated, deferredNotifications } = await this.prisma.$transaction(
+      async (tx) => {
+        const updated = await tx.sessionLog.update({
+          where: { id: sessionId },
+          data: { endedAt: new Date(), durationMins, studentsPresent: present, notes },
+        });
 
-    await this.classCurriculum.recordDeliveryAfterSession({
-      id: updated.id,
-      schoolId: updated.schoolId,
-      className: updated.className,
-      lessonId: updated.lessonId,
-      track: updated.track,
-    });
+        const { deferredNotifications } = await this.classCurriculum.recordDeliveryAfterSession(
+          {
+            id: updated.id,
+            schoolId: updated.schoolId,
+            className: updated.className,
+            lessonId: updated.lessonId,
+            track: updated.track,
+          },
+          tx,
+        );
+
+        return { updated, deferredNotifications };
+      },
+      { maxWait: 10_000, timeout: 60_000 },
+    );
+
+    if (deferredNotifications?.length) {
+      await this.prisma.notification.createMany({ data: deferredNotifications }).catch(() => {});
+    }
 
     return updated;
   }

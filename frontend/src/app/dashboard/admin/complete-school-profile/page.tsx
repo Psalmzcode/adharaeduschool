@@ -10,11 +10,22 @@ import { SCHOOL_TYPE_OPTIONS, TRACK_OPTIONS } from '@/lib/schoolProfileLabels'
 const LEVEL_OPTIONS = ['JSS1', 'JSS2', 'JSS3', 'SS1', 'SS2', 'SS3']
 
 const BANDS = ['Under 100', '100 – 300', '300 – 600', '600+']
+const TERM_OPTIONS = ['First Term', 'Second Term', 'Third Term'] as const
+
+function guessCurrentTermLabel(now = new Date()): string {
+  // Heuristic for Nigeria school calendar (varies by school):
+  // Sep–Dec: First Term, Jan–Apr: Second Term, May–Aug: Third Term.
+  const m = now.getMonth() + 1
+  if (m >= 9) return 'First Term'
+  if (m >= 1 && m <= 4) return 'Second Term'
+  return 'Third Term'
+}
 
 export default function CompleteSchoolProfilePage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [drafting, setDrafting] = useState(false)
   const [schoolId, setSchoolId] = useState<string | null>(null)
 
   const [displayName, setDisplayName] = useState('')
@@ -33,7 +44,7 @@ export default function CompleteSchoolProfilePage() {
   const [billPhone, setBillPhone] = useState('')
   const [levels, setLevels] = useState<string[]>([])
   const [tracks, setTracks] = useState<string[]>(['TRACK_1', 'TRACK_2', 'TRACK_3'])
-  const [term, setTerm] = useState('First Term')
+  const [term, setTerm] = useState(guessCurrentTermLabel())
   const [year, setYear] = useState('2025/2026')
   const [band, setBand] = useState('100 – 300')
   const [streams, setStreams] = useState('')
@@ -62,7 +73,7 @@ export default function CompleteSchoolProfilePage() {
         setBillPhone(s.billingContactPhone || '')
         if (Array.isArray(s.platformLevels) && s.platformLevels.length) setLevels(s.platformLevels)
         if (Array.isArray(s.enrolledTracks) && s.enrolledTracks.length) setTracks(s.enrolledTracks)
-        setTerm(s.currentTermLabel || 'First Term')
+        setTerm(s.currentTermLabel || guessCurrentTermLabel())
         setYear(s.academicYearLabel || '2025/2026')
         setBand(s.studentCountBand || '100 – 300')
         setStreams(s.streamsCount != null ? String(s.streamsCount) : '')
@@ -97,6 +108,48 @@ export default function CompleteSchoolProfilePage() {
       notify.fromError(e, 'Upload failed')
     }
     setUploadingLogo(false)
+  }
+
+  const saveDraft = async () => {
+    setDrafting(true)
+    try {
+      await schoolsApi.saveProfileDraft({
+        displayName: displayName.trim() || undefined,
+        officialName: officialName.trim() || undefined,
+        schoolType,
+        website: website.trim() || undefined,
+        officialEmail: officialEmail.trim() || undefined,
+        officialPhone: officialPhone.trim() || undefined,
+        principalName: principalName.trim() || undefined,
+        principalPhone: principalPhone.trim() || undefined,
+        ictContactName: ictName.trim() || undefined,
+        ictContactPhone: ictPhone.trim() || undefined,
+        ictContactEmail: ictEmail.trim() || undefined,
+        billingContactName: billName.trim() || undefined,
+        billingContactEmail: billEmail.trim() || undefined,
+        billingContactPhone: billPhone.trim() || undefined,
+        platformLevels: levels.length ? levels : undefined,
+        enrolledTracks: tracks.length ? tracks : undefined,
+        currentTermLabel: term.trim() || undefined,
+        academicYearLabel: year.trim() || undefined,
+        studentCountBand: band || undefined,
+        streamsCount: (() => {
+          const t = streams.trim()
+          if (!t) return undefined
+          const n = parseInt(t, 10)
+          return Number.isFinite(n) ? n : undefined
+        })(),
+        visitDeploymentNotes: visitNotes.trim() || undefined,
+        logoUrl: logoUrl.trim() || undefined,
+        timezone: 'Africa/Lagos',
+        locale: 'en-NG',
+      })
+      notify.success('Draft saved — you can log out and continue later.')
+    } catch (e: any) {
+      notify.fromError(e, 'Could not save draft')
+    } finally {
+      setDrafting(false)
+    }
   }
 
   const submit = async (e: React.FormEvent) => {
@@ -323,7 +376,13 @@ export default function CompleteSchoolProfilePage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
               <div className="form-group">
                 <label className="form-label">Current term</label>
-                <input className="form-input" value={term} onChange={(e) => setTerm(e.target.value)} required />
+                <select className="form-input" value={term} onChange={(e) => setTerm(e.target.value)} required>
+                  {TERM_OPTIONS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="form-group">
                 <label className="form-label">Academic year</label>
@@ -361,6 +420,9 @@ export default function CompleteSchoolProfilePage() {
           </section>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+            <button type="button" className="btn btn-ghost" disabled={drafting || saving} onClick={saveDraft}>
+              {drafting ? 'Saving draft…' : 'Save draft'}
+            </button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? 'Saving…' : 'Save & continue to dashboard'}
             </button>

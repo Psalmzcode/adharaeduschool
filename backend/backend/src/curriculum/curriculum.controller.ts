@@ -28,6 +28,21 @@ export class CurriculumController {
     return this.lessonsService.listForModule(moduleId, { publishedOnly: pub });
   }
 
+  /** Canonical + module fallback files for the signed-in student (class current lesson → module). */
+  @Get('my-learning-materials')
+  @UseGuards(RolesGuard)
+  @Roles('STUDENT')
+  myLearningMaterials(@Request() req) {
+    return this.classState.getLearningMaterialsForStudent(req.user.sub);
+  }
+
+  @Get('my-lesson-journey')
+  @UseGuards(RolesGuard)
+  @Roles('STUDENT')
+  myLessonJourney(@Request() req) {
+    return this.classState.getStudentLessonJourney(req.user.sub);
+  }
+
   @Get('lessons/:id')
   @UseGuards(RolesGuard)
   @Roles('TUTOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN', 'CURRICULUM_LEAD', 'STUDENT')

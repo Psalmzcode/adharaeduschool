@@ -22,7 +22,14 @@ export default function LoginPage() {
       const data = await authApi.login(loginId, password)
       localStorage.setItem('adhara_token', data.token)
       if (data.user) localStorage.setItem('adhara_user', JSON.stringify(data.user))
-      const dest: Record<string,string> = {SUPER_ADMIN:'/dashboard/superadmin',SCHOOL_ADMIN:'/dashboard/admin',TUTOR:'/dashboard/tutor',STUDENT:'/dashboard/student',PARENT:'/dashboard/student'}
+      const dest: Record<string,string> = {
+        SUPER_ADMIN:'/dashboard/superadmin',
+        CURRICULUM_LEAD:'/dashboard/curriculum',
+        SCHOOL_ADMIN:'/dashboard/admin',
+        TUTOR:'/dashboard/tutor',
+        STUDENT:'/dashboard/student',
+        PARENT:'/dashboard/student',
+      }
       if (data.user?.role === 'TUTOR') {
         try {
           const profile = await tutorsApi.me()

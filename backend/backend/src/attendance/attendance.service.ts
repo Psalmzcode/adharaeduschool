@@ -13,16 +13,21 @@ export class AttendanceService {
     markedBy: string,
   ) {
     const dateObj = new Date(date);
-    const results = await Promise.all(
-      records.map((r) =>
-        this.prisma.attendance.upsert({
-          where: { studentId_date: { studentId: r.studentId, date: dateObj } },
-          create: { studentId: r.studentId, date: dateObj, status: r.status, notes: r.notes, markedBy },
-          update: { status: r.status, notes: r.notes, markedBy },
-        }),
-      ),
+    await this.prisma.$transaction(
+      async (tx) => {
+        await Promise.all(
+          records.map((r) =>
+            tx.attendance.upsert({
+              where: { studentId_date: { studentId: r.studentId, date: dateObj } },
+              create: { studentId: r.studentId, date: dateObj, status: r.status, notes: r.notes, markedBy },
+              update: { status: r.status, notes: r.notes, markedBy },
+            }),
+          ),
+        );
+      },
+      { maxWait: 10_000, timeout: 60_000 },
     );
-    return { marked: results.length, date };
+    return { marked: records.length, date };
   }
 
   // Get attendance for a class on a date

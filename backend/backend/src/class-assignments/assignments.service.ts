@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { ConfigService } from '@nestjs/config';
+import { AcademicAuditService, AuditActor } from '../academic-audit/academic-audit.service';
+import { AcademicAuditAction } from '@prisma/client';
 
 @Injectable()
 export class ClassAssignmentsService {
@@ -9,6 +11,7 @@ export class ClassAssignmentsService {
     private prisma: PrismaService,
     private emailService: EmailService,
     private config: ConfigService,
+    private audit: AcademicAuditService,
   ) {}
 
   async create(tutorUserId: string, data: any) {
@@ -16,25 +19,26 @@ export class ClassAssignmentsService {
       ? Array.from(new Set(data.classNames.map((c: any) => String(c || '').trim()).filter(Boolean)))
       : [];
     const targets: string[] = classNames.length ? classNames : [String(data.className || '').trim()].filter(Boolean);
+    if (!targets.length) throw new BadRequestException('At least one class target is required');
 
-    const createOne = async (className: string) => {
-      const assignment = await this.prisma.classAssignment.create({
-        data: {
-          tutorId: tutorUserId,
-          schoolId: data.schoolId,
-          className,
-          moduleId: data.moduleId,
-          title: data.title,
-          description: data.description,
-          dueDate: new Date(data.dueDate),
-          maxScore: data.maxScore || 100,
-          isPublished: true,
-        },
-        include: { school: { select: { name: true } } },
-      });
+    const assignmentCreateData = (className: string) => ({
+      tutorId: tutorUserId,
+      schoolId: data.schoolId,
+      className,
+      moduleId: data.moduleId,
+      title: data.title,
+      description: data.description,
+      dueDate: new Date(data.dueDate),
+      maxScore: data.maxScore || 100,
+      isPublished: true,
+    });
 
+    const notifyStudentsForClass = async (
+      assignment: { schoolId: string; className: string },
+      className: string,
+    ) => {
       const students = await this.prisma.student.findMany({
-        where: { schoolId: data.schoolId, className },
+        where: { schoolId: assignment.schoolId, className },
         include: { user: { select: { firstName: true, email: true } } },
       });
 
@@ -59,12 +63,29 @@ export class ClassAssignmentsService {
           },
         }).catch(() => {});
       }
-
-      return assignment;
     };
 
-    if (targets.length <= 1) return createOne(targets[0] || data.className);
-    return Promise.all(targets.map((className) => createOne(className)));
+    if (targets.length <= 1) {
+      const className = targets[0] || String(data.className || '').trim();
+      const assignment = await this.prisma.classAssignment.create({
+        data: assignmentCreateData(className),
+        include: { school: { select: { name: true } } },
+      });
+      await notifyStudentsForClass(assignment, className);
+      return assignment;
+    }
+
+    const assignments = await this.prisma.$transaction(
+      targets.map((className) =>
+        this.prisma.classAssignment.create({
+          data: assignmentCreateData(className),
+          include: { school: { select: { name: true } } },
+        }),
+      ),
+    );
+
+    await Promise.all(assignments.map((a, i) => notifyStudentsForClass(a, targets[i]!)));
+    return assignments;
   }
 
   async findByTutor(tutorUserId: string) {
@@ -123,11 +144,11 @@ export class ClassAssignmentsService {
     });
   }
 
-  async grade(submissionId: string, score: number, feedback: string) {
+  async grade(submissionId: string, score: number, feedback: string, actor?: AuditActor) {
     const sub = await this.prisma.classAssignmentSubmission.update({
       where: { id: submissionId },
       data: { score, feedback, status: 'GRADED', gradedAt: new Date() },
-      include: { student: { include: { user: { select: { email: true, firstName: true } } } }, assignment: true },
+      include: { student: { include: { user: { select: { email: true, firstName: true, lastName: true } } } }, assignment: true },
     });
     // Notify student
     if (sub.student.user.email) {
@@ -140,6 +161,19 @@ export class ClassAssignmentsService {
         },
       });
     }
+    if (actor) {
+      const studentName = `${sub.student.user?.firstName || ''} ${sub.student.user?.lastName || ''}`.trim();
+      await this.audit.log({
+        schoolId: sub.assignment.schoolId,
+        actor,
+        action: AcademicAuditAction.ASSIGNMENT_GRADE,
+        className: sub.assignment.className,
+        studentId: sub.studentId,
+        moduleId: sub.assignment.moduleId || undefined,
+        summary: `Graded "${sub.assignment.title}" for ${studentName}: ${score}/${sub.assignment.maxScore}`,
+        metadata: { submissionId, score, maxScore: sub.assignment.maxScore },
+      });
+    }
     return sub;
   }
 
@@ -149,5 +183,30 @@ export class ClassAssignmentsService {
       include: { student: { include: { user: { select: { firstName: true, lastName: true } } } } },
       orderBy: { submittedAt: 'desc' },
     });
+  }
+
+  async update(assignmentId: string, tutorUserId: string, data: any) {
+    const row = await this.prisma.classAssignment.findUnique({ where: { id: assignmentId } });
+    if (!row) throw new NotFoundException('Assignment not found');
+    if (row.tutorId !== tutorUserId) throw new ForbiddenException('Not your assignment');
+    return this.prisma.classAssignment.update({
+      where: { id: assignmentId },
+      data: {
+        title: data.title,
+        description: data.description,
+        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
+        maxScore: data.maxScore,
+        moduleId: data.moduleId,
+        isPublished: data.isPublished,
+      },
+    });
+  }
+
+  async delete(assignmentId: string, tutorUserId: string) {
+    const row = await this.prisma.classAssignment.findUnique({ where: { id: assignmentId } });
+    if (!row) throw new NotFoundException('Assignment not found');
+    if (row.tutorId !== tutorUserId) throw new ForbiddenException('Not your assignment');
+    await this.prisma.classAssignmentSubmission.deleteMany({ where: { assignmentId } });
+    return this.prisma.classAssignment.delete({ where: { id: assignmentId } });
   }
 }

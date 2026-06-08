@@ -254,46 +254,51 @@ export class TutorsService {
     }
 
     // If a deactivated TUTOR exists, reactivate + reset password so the email can be reused for testing.
-    const user = existing
-      ? await this.prisma.user.update({
-          where: { id: existing.id },
-          data: {
-            password,
-            firstName: data.firstName,
-            lastName: data.lastName,
-            phone: data.phone,
-            role: 'TUTOR',
-            mustChangePassword: false,
-            isActive: true,
-          },
-        })
-      : await this.prisma.user.create({
-          data: {
-            email,
-            password,
-            firstName: data.firstName,
-            lastName: data.lastName,
-            phone: data.phone,
-            role: 'TUTOR',
-            mustChangePassword: false,
-          },
-        });
+    const tutor = await this.prisma.$transaction(
+      async (tx) => {
+        const user = existing
+          ? await tx.user.update({
+              where: { id: existing.id },
+              data: {
+                password,
+                firstName: data.firstName,
+                lastName: data.lastName,
+                phone: data.phone,
+                role: 'TUTOR',
+                mustChangePassword: false,
+                isActive: true,
+              },
+            })
+          : await tx.user.create({
+              data: {
+                email,
+                password,
+                firstName: data.firstName,
+                lastName: data.lastName,
+                phone: data.phone,
+                role: 'TUTOR',
+                mustChangePassword: false,
+              },
+            });
 
-    const tutor = await this.prisma.tutor.upsert({
-      where: { userId: user.id },
-      update: {
-        specializations: data.specializations || [],
-        tracks: data.tracks || [],
-        onboardingStatus: 'DRAFT',
+        return tx.tutor.upsert({
+          where: { userId: user.id },
+          update: {
+            specializations: data.specializations || [],
+            tracks: data.tracks || [],
+            onboardingStatus: 'DRAFT',
+          },
+          create: {
+            userId: user.id,
+            specializations: data.specializations || [],
+            tracks: data.tracks || [],
+            onboardingStatus: 'DRAFT',
+          },
+          include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        });
       },
-      create: {
-        userId: user.id,
-        specializations: data.specializations || [],
-        tracks: data.tracks || [],
-        onboardingStatus: 'DRAFT',
-      },
-      include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
-    });
+      { maxWait: 10_000, timeout: 30_000 },
+    );
 
     const base = (this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000').replace(/\/$/, '');
     await this.emailService.sendTutorWelcome({
@@ -492,10 +497,12 @@ export class TutorsService {
     const existingClassSet = new Set(existing.map((e) => e.className));
     const createTargets = targets.filter((className) => !existingClassSet.has(className));
 
-    const created = createTargets.length
-      ? await this.prisma.$transaction(
-          createTargets.map((className) =>
-            this.prisma.tutorAssignment.create({
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        const out: typeof existing = [];
+        for (const className of createTargets) {
+          out.push(
+            await tx.tutorAssignment.create({
               data: {
                 tutorId,
                 schoolId,
@@ -508,48 +515,49 @@ export class TutorsService {
               },
               include,
             }),
-          ),
-        )
-      : [];
-
-    if (created.length > 0) {
-      await this.prisma.tutorAssignment.updateMany({
-        where: {
-          tutorId,
-          schoolId,
-          track: data.track,
-          className: { in: targets },
-          isActive: true,
-          termLabel: { not: termLabel },
-        },
-        data: { isActive: false, endDate: new Date() },
-      });
-    }
+          );
+        }
+        if (out.length > 0) {
+          await tx.tutorAssignment.updateMany({
+            where: {
+              tutorId,
+              schoolId,
+              track: data.track,
+              className: { in: targets },
+              isActive: true,
+              termLabel: { not: termLabel },
+            },
+            data: { isActive: false, endDate: new Date() },
+          });
+        }
+        if (data.track === TrackLevel.TRACK_3 && stackForT3) {
+          await tx.tutorAssignment.updateMany({
+            where: {
+              tutorId,
+              schoolId,
+              track: TrackLevel.TRACK_3,
+              termLabel,
+              className: { in: targets },
+              isActive: true,
+            },
+            data: { track3Stack: stackForT3 },
+          });
+          await tx.student.updateMany({
+            where: {
+              schoolId,
+              className: { in: targets },
+              track: TrackLevel.TRACK_3,
+              termLabel,
+            },
+            data: { track3Stack: stackForT3 },
+          });
+        }
+        return out;
+      },
+      { maxWait: 10_000, timeout: 60_000 },
+    );
 
     const merged = [...existing, ...created];
-
-    if (data.track === TrackLevel.TRACK_3 && stackForT3) {
-      await this.prisma.tutorAssignment.updateMany({
-        where: {
-          tutorId,
-          schoolId,
-          track: TrackLevel.TRACK_3,
-          termLabel,
-          className: { in: targets },
-          isActive: true,
-        },
-        data: { track3Stack: stackForT3 },
-      });
-      await this.prisma.student.updateMany({
-        where: {
-          schoolId,
-          className: { in: targets },
-          track: TrackLevel.TRACK_3,
-          termLabel,
-        },
-        data: { track3Stack: stackForT3 },
-      });
-    }
     if (targets.length === 1) {
       return merged[0];
     }
@@ -586,15 +594,26 @@ export class TutorsService {
       this.prisma.cBTExam.count({ where: { tutorId } }),
     ]);
 
-    // Total students across assignments
+    // Total students across assigned classes (not per-school).
+    // The previous implementation summed the school's total students once per assignment,
+    // which over-counts when a tutor has multiple class assignments in the same school.
     const activeAssignments = await this.prisma.tutorAssignment.findMany({
       where: { tutorId, isActive: true },
-      include: { school: { include: { _count: { select: { students: true } } } } },
+      select: { schoolId: true, className: true },
     });
-    const totalStudents = activeAssignments.reduce(
-      (sum, a) => sum + (a.school._count.students || 0),
-      0,
+    const uniqClasses = new Map<string, { schoolId: string; className: string }>();
+    for (const a of activeAssignments) {
+      const schoolId = String(a.schoolId || '').trim();
+      const className = String(a.className || '').trim();
+      if (!schoolId || !className) continue;
+      uniqClasses.set(`${schoolId}::${className}`, { schoolId, className });
+    }
+    const counts = await Promise.all(
+      Array.from(uniqClasses.values()).map((c) =>
+        this.prisma.student.count({ where: { schoolId: c.schoolId, className: c.className } }),
+      ),
     );
+    const totalStudents = counts.reduce((sum, n) => sum + n, 0);
 
     return { activeSchools: assignments, submittedReports: reports, pendingReports, cbtExams, totalStudents, rating: tutor.rating };
   }

@@ -7,6 +7,7 @@ const BASE = (process.env.API_URL || 'http://localhost:3001/api/v1').replace(/\/
 
 const accounts = [
   { role: 'SUPER_ADMIN', login: 'admin@adharaedu.com', password: 'SuperAdmin@123' },
+  { role: 'CURRICULUM_LEAD', login: 'curriculum@adharaedu.com', password: 'Curriculum@123' },
   { role: 'SCHOOL_ADMIN', login: 'admin@crownheights.edu.ng', password: 'SchoolAdmin@123' },
   { role: 'TUTOR', login: 'tutor@adharaedu.com', password: 'Tutor@123' },
   { role: 'STUDENT', login: 'chr.aisha', password: 'student@021' },

@@ -1,5 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveClassEnrollment } from '../common/class-registry';
+import type { PrismaDb } from '../common/prisma-db.type';
 import { ModuleStackVariant, Track3Stack, TrackLevel, Role } from '@prisma/client';
 import { modulesWhereForTrack } from '../common/module-curriculum';
 import * as argon2 from '@node-rs/argon2';
@@ -139,130 +141,154 @@ export class StudentsService {
     phone?: string;
     parentId?: string;
   }) {
-    const school = await this.prisma.school.findUnique({ where: { id: data.schoolId } });
-    const count = await this.prisma.student.count({ where: { schoolId: data.schoolId } });
-    if (!school) throw new NotFoundException('School not found');
-    const regNumber = `${school.code}/${new Date().getFullYear()}/${data.className}/${String(count + 1).padStart(3, '0')}`;
-    const regSuffix = regNumber.split('/').pop()?.trim() || String(count + 1).padStart(3, '0');
-    const initialPasswordPlain = `student@${regSuffix}`;
-    const password = await argon2.hash(initialPasswordPlain);
-
     const emailTrim = data.email?.trim() || null;
-    if (emailTrim) {
-      const emailTaken = await this.prisma.user.findFirst({
-        where: { email: { equals: emailTrim, mode: 'insensitive' } },
-      });
-      if (emailTaken) throw new ConflictException('Email already registered');
-    }
-
-    const username = await this.allocateStudentUsername(
+    const enrollment = await resolveClassEnrollment(
+      this.prisma,
       data.schoolId,
-      data.firstName,
-      data.lastName,
-      data.username?.trim() || null,
+      data.className,
+      data.track,
     );
 
-    const user = await this.prisma.user.create({
-      data: {
-        email: emailTrim,
-        username,
-        password,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        phone: data.phone,
-        role: 'STUDENT',
-        schoolId: data.schoolId,
-        mustChangePassword: true,
-      },
-    });
+    const { student, user, school, initialPasswordPlain, username, regNumber } = await this.prisma.$transaction(
+      async (tx) => {
+        const schoolRow = await tx.school.findUnique({ where: { id: data.schoolId } });
+        const count = await tx.student.count({ where: { schoolId: data.schoolId } });
+        if (!schoolRow) throw new NotFoundException('School not found');
+        const regNum = `${schoolRow.code}/${new Date().getFullYear()}/${enrollment.className}/${String(count + 1).padStart(3, '0')}`;
+        const regSuffix = regNum.split('/').pop()?.trim() || String(count + 1).padStart(3, '0');
+        const initialPasswordPlainInner = `student@${regSuffix}`;
+        const password = await argon2.hash(initialPasswordPlainInner);
 
-    let track3Stack: Track3Stack | undefined;
-    if (data.track === TrackLevel.TRACK_3) {
-      const assignment = await this.prisma.tutorAssignment.findFirst({
-        where: {
-          schoolId: data.schoolId,
-          className: data.className,
-          track: TrackLevel.TRACK_3,
-          isActive: true,
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-      track3Stack = assignment?.track3Stack ?? Track3Stack.PYTHON_FLASK;
-    }
+        if (emailTrim) {
+          const emailTaken = await tx.user.findFirst({
+            where: { email: { equals: emailTrim, mode: 'insensitive' } },
+          });
+          if (emailTaken) throw new ConflictException('Email already registered');
+        }
 
-    const student = await this.prisma.student.create({
-      data: {
-        userId: user.id,
-        schoolId: data.schoolId,
-        regNumber,
-        className: data.className,
-        track: data.track,
-        termLabel: data.termLabel,
-        parentId: data.parentId,
-        track3Stack,
-      },
-    });
+        const usernameInner = await this.allocateStudentUsername(
+          data.schoolId,
+          data.firstName,
+          data.lastName,
+          data.username?.trim() || null,
+          tx,
+        );
 
-    const allowedModules = await this.prisma.module.findMany({
-      where: modulesWhereForTrack(data.track, track3Stack),
-      select: { id: true },
-    });
-    const allowedModuleIds = new Set(allowedModules.map((m) => m.id));
-
-    // Class-based pacing: align new student to the class's current module if available
-    const classmates = await this.prisma.student.findMany({
-      where: {
-        schoolId: data.schoolId,
-        className: data.className,
-        id: { not: student.id },
-      },
-      select: { id: true },
-      take: 50,
-    });
-    const classmateIds = classmates.map((c) => c.id);
-    const inProgressRows = classmateIds.length
-      ? await this.prisma.moduleProgress.findMany({
-          where: {
-            studentId: { in: classmateIds },
-            status: 'IN_PROGRESS',
-            module: { track: data.track },
+        const userRow = await tx.user.create({
+          data: {
+            email: emailTrim,
+            username: usernameInner,
+            password,
+            firstName: data.firstName,
+            lastName: data.lastName,
+            phone: data.phone,
+            role: 'STUDENT',
+            schoolId: data.schoolId,
+            mustChangePassword: true,
           },
-          include: { module: { select: { id: true, number: true } } },
-        })
-      : [];
-    const filteredProgress = inProgressRows.filter((r) => allowedModuleIds.has(r.moduleId));
-    const moduleFrequency = filteredProgress.reduce((acc: Record<string, { count: number; number: number }>, row) => {
-      if (!acc[row.moduleId]) acc[row.moduleId] = { count: 0, number: row.module.number };
-      acc[row.moduleId].count += 1;
-      return acc;
-    }, {});
-    const preferredModuleId = Object.entries(moduleFrequency)
-      .sort((a, b) => b[1].count - a[1].count || a[1].number - b[1].number)[0]?.[0];
+        });
 
-    let firstModule =
-      preferredModuleId && allowedModuleIds.has(preferredModuleId)
-        ? await this.prisma.module.findUnique({ where: { id: preferredModuleId } })
-        : null;
-    if (!firstModule) {
-      firstModule = await this.prisma.module.findFirst({
-        where: {
-          track: data.track,
-          number: 1,
-          stackVariant: ModuleStackVariant.COMMON,
-        },
-      });
-    }
+        let track3Stack: Track3Stack | undefined;
+        if (enrollment.track === TrackLevel.TRACK_3) {
+          const assignment = await tx.tutorAssignment.findFirst({
+            where: {
+              schoolId: data.schoolId,
+              className: enrollment.className,
+              track: TrackLevel.TRACK_3,
+              isActive: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+          track3Stack = assignment?.track3Stack ?? Track3Stack.PYTHON_FLASK;
+        }
 
-    if (firstModule) {
-      await this.prisma.moduleProgress.create({
-        data: {
-          studentId: student.id,
-          moduleId: firstModule.id,
-          status: 'IN_PROGRESS',
-          termLabel: data.termLabel,
-        },
-      });
-    }
+        const studentRow = await tx.student.create({
+          data: {
+            userId: userRow.id,
+            schoolId: data.schoolId,
+            regNumber: regNum,
+            className: enrollment.className,
+            track: enrollment.track,
+            termLabel: data.termLabel,
+            parentId: data.parentId,
+            track3Stack,
+          },
+        });
+
+        const allowedModules = await tx.module.findMany({
+          where: modulesWhereForTrack(enrollment.track, track3Stack),
+          select: { id: true },
+        });
+        const allowedModuleIds = new Set(allowedModules.map((m) => m.id));
+
+        const classmates = await tx.student.findMany({
+          where: {
+            schoolId: data.schoolId,
+            className: enrollment.className,
+            id: { not: studentRow.id },
+          },
+          select: { id: true },
+          take: 50,
+        });
+        const classmateIds = classmates.map((c) => c.id);
+        const inProgressRows = classmateIds.length
+          ? await tx.moduleProgress.findMany({
+              where: {
+                studentId: { in: classmateIds },
+                status: 'IN_PROGRESS',
+                module: { track: enrollment.track },
+              },
+              include: { module: { select: { id: true, number: true } } },
+            })
+          : [];
+        const filteredProgress = inProgressRows.filter((r) => allowedModuleIds.has(r.moduleId));
+        const moduleFrequency = filteredProgress.reduce(
+          (acc: Record<string, { count: number; number: number }>, row) => {
+            if (!acc[row.moduleId]) acc[row.moduleId] = { count: 0, number: row.module.number };
+            acc[row.moduleId].count += 1;
+            return acc;
+          },
+          {},
+        );
+        const preferredModuleId = Object.entries(moduleFrequency)
+          .sort((a, b) => b[1].count - a[1].count || a[1].number - b[1].number)[0]?.[0];
+
+        let firstModule =
+          preferredModuleId && allowedModuleIds.has(preferredModuleId)
+            ? await tx.module.findUnique({ where: { id: preferredModuleId } })
+            : null;
+        if (!firstModule) {
+          firstModule = await tx.module.findFirst({
+            where: {
+              track: enrollment.track,
+              number: 1,
+              stackVariant: ModuleStackVariant.COMMON,
+            },
+          });
+        }
+
+        if (firstModule) {
+          await tx.moduleProgress.create({
+            data: {
+              studentId: studentRow.id,
+              moduleId: firstModule.id,
+              status: 'IN_PROGRESS',
+              termLabel: data.termLabel,
+            },
+          });
+        }
+
+        return {
+          student: studentRow,
+          user: userRow,
+          school: schoolRow,
+          initialPasswordPlain: initialPasswordPlainInner,
+          username: usernameInner,
+          regNumber: regNum,
+        };
+      },
+      { maxWait: 10_000, timeout: 60_000 },
+    );
 
     const loginUrl = this.config.get('FRONTEND_URL', 'http://localhost:3000');
     if (emailTrim) {
@@ -274,8 +300,8 @@ export class StudentsService {
           lastName: data.lastName,
           regNumber,
           schoolName: school.name,
-          track: data.track,
-          className: data.className,
+          track: enrollment.track,
+          className: enrollment.className,
           password: initialPasswordPlain,
           loginUrl,
         })
@@ -336,14 +362,16 @@ export class StudentsService {
     firstName: string,
     lastName: string,
     explicit: string | null,
+    db: PrismaDb = this.prisma,
   ): Promise<string> {
-    const school = await this.prisma.school.findUnique({ where: { id: schoolId }, select: { code: true } });
+    const school = await db.school.findUnique({ where: { id: schoolId }, select: { code: true } });
     const code = this.slugifyPart(school?.code || 'SCH');
 
     if (explicit) {
-      const normalized = explicit.toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 48);
+      const cleaned = explicit.trim().replace(/^@+/, '');
+      const normalized = cleaned.toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 48);
       if (normalized.length < 2) throw new BadRequestException('Username must be at least 2 characters');
-      const taken = await this.prisma.user.findUnique({ where: { username: normalized } });
+      const taken = await db.user.findUnique({ where: { username: normalized } });
       if (taken) throw new ConflictException(`Username "${normalized}" is already taken`);
       return normalized;
     }
@@ -354,7 +382,7 @@ export class StudentsService {
     if (base.length < 4) base = `${code}.student`;
     let candidate = base.slice(0, 48);
     let n = 0;
-    while (await this.prisma.user.findUnique({ where: { username: candidate } })) {
+    while (await db.user.findUnique({ where: { username: candidate } })) {
       n++;
       candidate = `${base}-${n}`.slice(0, 48);
     }
@@ -369,8 +397,25 @@ export class StudentsService {
   }
 
   async update(id: string, data: any) {
-    await this.findOne(id);
-    return this.prisma.student.update({ where: { id }, data });
+    const existing = await this.prisma.student.findUnique({
+      where: { id },
+      select: { id: true, schoolId: true, className: true, track: true },
+    });
+    if (!existing) throw new NotFoundException('Student not found');
+
+    const patch = { ...data };
+    if (patch.className !== undefined || patch.track !== undefined) {
+      const resolved = await resolveClassEnrollment(
+        this.prisma,
+        existing.schoolId,
+        patch.className ?? existing.className,
+        patch.track ?? existing.track,
+      );
+      patch.className = resolved.className;
+      patch.track = resolved.track;
+    }
+
+    return this.prisma.student.update({ where: { id }, data: patch });
   }
 
   /** Tutor-safe edit: update student user name fields only. */

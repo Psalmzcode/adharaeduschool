@@ -11,7 +11,7 @@ export class TracksController {
   constructor(private readonly service: TracksService) {}
 
   @Get()
-  @Roles('SUPER_ADMIN', 'SCHOOL_ADMIN', 'TUTOR')
+  @Roles('SUPER_ADMIN', 'CURRICULUM_LEAD', 'SCHOOL_ADMIN', 'TUTOR')
   findAll() {
     return this.service.findAll();
   }

@@ -117,6 +117,7 @@ export default function LoginOtpPage() {
       localStorage.setItem('adhara_token', tokenPayload.token)
       const dest: Record<string, string> = {
         SUPER_ADMIN: '/dashboard/superadmin',
+        CURRICULUM_LEAD: '/dashboard/curriculum',
         SCHOOL_ADMIN: '/dashboard/admin',
         TUTOR: '/dashboard/tutor',
         STUDENT: '/dashboard/student',

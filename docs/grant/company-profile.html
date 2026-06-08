@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AdharaEdu — Company Profile</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Hind:wght@400;500;600&family=Nunito:wght@400;600;700;800;900&display=swap');
+    :root { --navy: #0a1628; --navy2: #111f38; --gold: #d4a853; --teal: #1a7fd4; --border: #e5e7eb; --muted: #555; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Hind', sans-serif; color: #1a1a1a; line-height: 1.55; font-size: 11pt; }
+    @page { size: A4; margin: 18mm 16mm; }
+    @media print { .page { page-break-after: always; } .page:last-child { page-break-after: auto; } }
+    .page { max-width: 210mm; min-height: 277mm; margin: 0 auto; padding: 12mm 14mm; }
+    .cover { background: linear-gradient(145deg, var(--navy), var(--navy2)); color: #fff; display: flex; flex-direction: column; justify-content: center; min-height: 277mm; padding: 24mm; }
+    .cover .eyebrow { font-size: 10pt; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gold); margin-bottom: 16px; }
+    .cover h1 { font-family: 'Nunito', sans-serif; font-size: 36pt; font-weight: 800; line-height: 1.1; margin-bottom: 12px; }
+    .cover .tagline { font-size: 14pt; color: rgba(255,255,255,0.75); max-width: 480px; margin-bottom: 48px; }
+    .cover .meta { margin-top: auto; font-size: 10pt; color: rgba(255,255,255,0.6); line-height: 1.8; }
+    .cover .meta strong { color: var(--gold); }
+    h2 { font-family: 'Nunito', sans-serif; font-size: 16pt; color: var(--navy); margin: 0 0 10px; padding-bottom: 6px; border-bottom: 2px solid var(--gold); }
+    h3 { font-size: 11pt; color: var(--navy); margin: 12px 0 6px; }
+    p { margin-bottom: 10px; color: #333; }
+    ul, ol { margin: 0 0 12px 18px; } li { margin-bottom: 4px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0; }
+    .stat-box { background: #f8f9fb; border: 1px solid var(--border); border-left: 3px solid var(--gold); padding: 12px 14px; border-radius: 6px; }
+    .stat-box .num { font-family: 'Nunito', sans-serif; font-size: 18pt; font-weight: 800; color: var(--navy); }
+    .stat-box .lbl { font-size: 9pt; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 10px 0 14px; }
+    th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
+    th { background: var(--navy); color: #fff; }
+    tr:nth-child(even) td { background: #f8f9fb; }
+    .team-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+    .team-card .name { font-weight: 700; color: var(--navy); }
+    .team-card .role { font-size: 9pt; color: var(--teal); margin-bottom: 6px; }
+    .timeline { font-size: 10pt; }
+    .timeline td:first-child { font-weight: 600; width: 28%; color: var(--navy); }
+    .footer-note { margin-top: 24px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 9pt; color: var(--muted); text-align: center; }
+  </style>
+</head>
+<body>
+
+<section class="page cover">
+  <p class="eyebrow">Company Profile · 2026</p>
+  <h1>AdharaEdu<br/>Tech Solutions Limited</h1>
+  <p class="tagline">Structured technology education for secondary schools — practical digital skills for academic success, university preparation, and future careers.</p>
+  <div class="meta">
+    <strong>Primary sector:</strong> Education (EdTech)<br/>
+    <strong>Market:</strong> Nigeria<br/>
+    <strong>Programme fee:</strong> ₦15,000 per student / per term<br/><br/>
+    <strong>Contact:</strong> Ali Samuel Chidera, CEO<br/>
+    <strong>Email:</strong> info@adharaedu.com<br/>
+    <strong>Phone:</strong> +234 816 048 6223<br/>
+    <strong>Web:</strong> www.adharaedu.com
+  </div>
+</section>
+
+<section class="page">
+  <h2>1. Executive Summary</h2>
+  <p>
+    AdharaEdu provides structured technology education designed to equip secondary school students with practical digital skills required for academic success, university preparation, and future careers. The programme is delivered within a school’s existing computer laboratory using trained tutors, structured learning materials, and measurable outcomes.
+  </p>
+  <p>
+    The programme is organised into three progressive tracks: <strong>Digital Foundations</strong>, <strong>Introduction to Programming</strong>, and <strong>Advanced Tech &amp; Career Readiness</strong>. A digital platform supports enrollment, attendance, assessments, certificates, payments, and reporting for schools, tutors, students, and parents.
+  </p>
+
+  <div class="grid-2">
+    <div class="stat-box"><div class="num">3</div><div class="lbl">Progressive learning tracks</div></div>
+    <div class="stat-box"><div class="num">₦15k</div><div class="lbl">Per student / per term (core programme)</div></div>
+    <div class="stat-box"><div class="num">4 weeks</div><div class="lbl">Partnership to programme launch</div></div>
+    <div class="stat-box"><div class="num">In-school</div><div class="lbl">Delivery in existing computer labs</div></div>
+  </div>
+
+  <h2>2. Programme Structure</h2>
+
+  <h3>Track 1 — Digital Foundations</h3>
+  <p>Students learn core computer literacy including file management, typing skills, document creation with Microsoft Word, spreadsheet fundamentals with Excel, and responsible internet usage.</p>
+
+  <h3>Track 2 — Introduction to Programming</h3>
+  <p>Students learn programming logic using Scratch before progressing to HTML and CSS to build structured and styled multi-page websites.</p>
+
+  <h3>Track 3 — Advanced Tech &amp; Career Readiness</h3>
+  <p>Students expand their skills with JavaScript and Python programming while building a personal project portfolio.</p>
+</section>
+
+<section class="page">
+  <h2>3. Programme Delivery</h2>
+  <p>
+    The programme is delivered within each school’s timetable structure. Session duration and frequency depend on the periods allocated by the school. Lessons combine demonstrations, guided practice, and hands-on student projects.
+  </p>
+  <p>
+    AdharaEdu deploys trained tutors, provides structured learning materials, and gives schools access to an online dashboard for administrators, tutors, students, and parents — enabling real-time visibility into attendance, progress, and results.
+  </p>
+
+  <h2>4. Student Assessment</h2>
+  <p>
+    Students complete end-of-term assessments consisting of a <strong>practical task</strong> and a <strong>short theory component</strong>. Successful students receive <strong>AdharaEdu Certificates of Completion</strong> documenting their skill development. Certificates are verifiable online (QR code) for schools and partners.
+  </p>
+  <p>The platform also supports computer-based testing (CBT), assignments, and practical assessments throughout the term.</p>
+
+  <h2>5. Programme Pricing</h2>
+  <table>
+    <tr><th>Programme</th><th>Fee</th></tr>
+    <tr><td>Tech Skills Education Programme</td><td><strong>₦15,000 per student / per term</strong></td></tr>
+  </table>
+  <p>Institutional partnership pricing may be structured for schools enrolling multiple classes or full-school participation. Payments are managed through the AdharaEdu platform (including online payment via Paystack).</p>
+
+  <h2>6. Implementation Timeline</h2>
+  <table class="timeline">
+    <tr><td>Week 1</td><td>Partnership agreement and scheduling</td></tr>
+    <tr><td>Week 2</td><td>Tutor preparation and coordination with school</td></tr>
+    <tr><td>Week 3</td><td>Programme orientation and materials preparation</td></tr>
+    <tr><td>Week 4</td><td>Programme launch</td></tr>
+  </table>
+</section>
+
+<section class="page">
+  <h2>Company Overview</h2>
+  <p><strong>Legal name:</strong> AdharaEdu Tech Solutions Limited</p>
+  <p><strong>Business model:</strong> B2B partnerships with secondary schools — per-student term fees plus optional services (staff training, school website, bootcamps, grant application support).</p>
+  <p><strong>Technology:</strong> Production-ready web platform (school admin, tutor, student, parent, and super-admin portals).</p>
+
+  <h2>Leadership</h2>
+  <div class="team-card">
+    <div class="name">Ali Samuel Chidera</div>
+    <div class="role">CEO &amp; Co-Founder</div>
+    <p>Former technology educator. Leads partnerships, programme delivery, and mission to bring practical tech education into Nigerian secondary schools.</p>
+  </div>
+  <div class="team-card">
+    <div class="name">Okechukwu Emmanuel Ukwueji</div>
+    <div class="role">CTO &amp; Co-Founder</div>
+    <p>Leads platform engineering — school dashboards, assessments, and tools built for Nigerian school realities.</p>
+  </div>
+
+  <h2>Contact</h2>
+  <p>
+    <strong>Ali Samuel Chidera</strong><br/>
+    Phone: +234 816 048 6223<br/>
+    Email: info@adharaedu.com
+  </p>
+
+  <h2>Funding (for grant applications)</h2>
+  <p><strong>Amount requested:</strong> [fill in — e.g. $20,000 – $50,000]</p>
+  <p><strong>Use of funds:</strong> Scale school partnerships, tutor deployment, lab support, monitoring &amp; evaluation, platform operations.</p>
+  <p><strong>Traction to add:</strong> [number of partner schools, students enrolled, states — use verified figures only]</p>
+
+  <div class="footer-note">© 2026 AdharaEdu Tech Solutions Limited · Confidential</div>
+</section>
+
+</body>
+</html>

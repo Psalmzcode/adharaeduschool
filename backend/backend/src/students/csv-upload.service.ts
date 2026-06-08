@@ -24,6 +24,15 @@ export class CsvUploadService {
     };
 
     const results: any[] = [];
+    const usernameCounters = new Map<string, number>();
+    const slug = (s: string) =>
+      String(s || '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '')
+        .slice(0, 24);
 
     const splitFullName = (fullName: string) => {
       const cleaned = String(fullName || '').trim().replace(/\s+/g, ' ');
@@ -45,6 +54,46 @@ export class CsvUploadService {
       const emailRaw = col(row, "email").trim();
       const usernameRaw = col(row, "username").trim();
 
+      // If username column is empty, generate an @handle from name.
+      // IMPORTANT: counters reset per upload; we also auto-retry if a suffix is already taken (previous uploads).
+      const base = (() => {
+        const fn = slug(firstName);
+        const ln = slug(lastName).slice(0, 1);
+        const b = `${fn}${ln}` || 'student';
+        return b.length < 3 ? `${b}student` : b;
+      })();
+
+      const tryCreateAutoUsername = async () => {
+        let cur = usernameCounters.get(base) ?? 0;
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const candidate = `@${base}${cur}`;
+          try {
+            const created = await this.students.create({
+              schoolId,
+              firstName,
+              lastName: lastName || "Student",
+              email: emailRaw || undefined,
+              username: candidate,
+              phone: col(row, "phone") || undefined,
+              className: col(row, "classname") || col(row, "class") || defaults.className,
+              track: (col(row, "track") || defaults.track) as any,
+              termLabel: defaults.termLabel,
+            });
+            usernameCounters.set(base, cur + 1);
+            return { created, candidate };
+          } catch (e: any) {
+            const msg = String(e?.message || '');
+            // If generated username already exists, bump suffix and retry.
+            if (msg.includes('Username "') && msg.toLowerCase().includes('already taken')) {
+              cur++;
+              continue;
+            }
+            throw e;
+          }
+        }
+        throw new Error(`Could not allocate a unique username for "${displayName}"`);
+      };
+
       try {
         const data = {
           schoolId,
@@ -58,7 +107,10 @@ export class CsvUploadService {
           termLabel: defaults.termLabel,
         };
 
-        const created = await this.students.create(data);
+        const created =
+          usernameRaw
+            ? await this.students.create(data)
+            : (await tryCreateAutoUsername()).created;
 
         results.push({
           success: true,

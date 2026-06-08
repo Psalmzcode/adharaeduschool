@@ -5,11 +5,11 @@ import Link from 'next/link'
 import { HomeServicesCarousel } from '@/components/HomeServicesCarousel'
 import { MarketingNav } from '@/components/MarketingNav'
 
-const HERO_IMAGES = [
-  'https://images.unsplash.com/photo-1531482615713-2afd69097998?w=600&q=80',
-  '/hero/slide-1.png',
-  '/hero/slide-2.png',
-  '/hero/slide-3.png',
+const HERO_SLIDES = [
+  { src: '/hero/slide-1.png', alt: 'Two students collaborating on a laptop in a school library' },
+  { src: '/hero/slide-2.png', alt: 'Students learning together with a laptop at a desk' },
+  { src: '/hero/slide-3.png', alt: 'Study group working on a laptop in a bright library' },
+  { src: '/hero/slide-4.png', alt: 'Students focused on coursework in a collaborative study session' },
 ]
 
 export default function HomePage() {
@@ -17,7 +17,7 @@ export default function HomePage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      setHeroImageIndex((i) => (i + 1) % HERO_IMAGES.length)
+      setHeroImageIndex((i) => (i + 1) % HERO_SLIDES.length)
     }, 4500)
     return () => window.clearInterval(timer)
   }, [])
@@ -84,8 +84,8 @@ export default function HomePage() {
           <div className="hero-image-shine"></div>
           <div className="hero-image-frame">
             <img
-              src={HERO_IMAGES[heroImageIndex]}
-              alt="Students learning tech skills"
+              src={HERO_SLIDES[heroImageIndex].src}
+              alt={HERO_SLIDES[heroImageIndex].alt}
               style={{width:'100%',height:'100%',objectFit:'cover',objectPosition:'center top'}}
             />
             <div className="hero-image-overlay"></div>

@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
-import { studentsApi, modulesApi, attendanceApi, notifApi, messagesApi, certificatesApi, assignmentsApi, examSchedulesApi, noticesApi, practicalsApi, lessonsApi, uploadsApi, authApi } from '@/lib/api'
+import { studentsApi, modulesApi, attendanceApi, notifApi, messagesApi, certificatesApi, assignmentsApi, examSchedulesApi, noticesApi, practicalsApi, lessonsApi, uploadsApi, authApi, curriculumApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { formatTrack } from '@/lib/schoolProfileLabels'
 
@@ -139,41 +139,124 @@ function StudentHome({ student, stats, progress, onSection }: any) {
 }
 
 /* ── MODULES ── */
-function StudentModules({ progress, student }: { progress: any[]; student: any }) {
-  const { data: lessonPlans, loading: lessonPlansLoading } = useLoad(
-    ['student', 'lesson-materials', student?.id],
-    () => lessonsApi.forStudentClass(),
-    [],
-    !!student?.id
-  )
-  const plansArr = Array.isArray(lessonPlans) ? lessonPlans : []
-  const [materialsByPlanId, setMaterialsByPlanId] = useState<Record<string, any[]>>({})
+function fileHref(f: any) {
+  return f?.url || f?.fileUrl || '#'
+}
 
-  useEffect(() => {
-    let cancelled = false
-    const loadMaterials = async () => {
-      const next: Record<string, any[]> = {}
-      await Promise.all(
-        plansArr.map(async (plan: any) => {
-          if (!plan?.id) return
-          const files = await uploadsApi.byEntity('lesson-plan', plan.id).catch(() => [])
-          next[plan.id] = Array.isArray(files) ? files : []
-        })
-      )
-      if (!cancelled) setMaterialsByPlanId(next)
-    }
-    if (plansArr.length) loadMaterials()
-    else setMaterialsByPlanId({})
-    return () => {
-      cancelled = true
-    }
-  }, [plansArr.map((p: any) => p.id).join('|')])
+function StudentModules({ progress, student }: { progress: any[]; student: any }) {
+  const { data: journey, loading: journeyLoading } = useLoad(
+    ['student', 'lesson-journey', student?.id],
+    () => curriculumApi.myLessonJourney(),
+    null as any,
+    !!student?.id,
+  )
+  const j = journey && typeof journey === 'object' ? journey : null
+  const lessons = Array.isArray(j?.lessons) ? j.lessons : []
+  const handouts = Array.isArray(j?.tutorHandouts) ? j.tutorHandouts : []
+  const lastFiles = Array.isArray(j?.lastDeliveredLesson?.files) ? j.lastDeliveredLesson.files : []
+  const nextFiles = Array.isArray(j?.nextLesson?.files) ? j.nextLesson.files : []
+
+  const renderFiles = (files: any[], label: string) => {
+    if (!files.length) return null
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div className="text-xs text-muted mb-6">{label}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {files.map((f: any, i: number) => (
+            <a key={`${f.id || i}-${fileHref(f)}`} href={fileHref(f)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ justifyContent: 'flex-start' }}>
+              ⬇ {f.fileName || f.displayName || `File ${i + 1}`}
+            </a>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>
-      <h3 className="font-display fw-700 text-white mb-20" style={{ fontSize: 20 }}>My Modules</h3>
-      {lessonPlansLoading && <p className="text-muted text-sm mb-12">Loading lesson materials…</p>}
+      <h3 className="font-display fw-700 text-white mb-20" style={{ fontSize: 20 }}>My Modules & Lessons</h3>
+      {journeyLoading && <p className="text-muted text-sm mb-12">Loading lesson journey…</p>}
+
+      {j?.activeModule && (
+        <div className="card mb-20" style={{ borderColor: 'rgba(212,168,83,0.35)' }}>
+          <div className="font-display fw-600 text-white mb-8" style={{ fontSize: 15 }}>
+            Active module · Module {j.activeModule.number}: {j.activeModule.title}
+          </div>
+          {j.moduleProgress && (
+            <div className="text-muted text-sm mb-10">
+              Status: <span style={{ color: 'var(--white)' }}>{j.moduleProgress.status}</span>
+              {j.moduleProgress.score != null && <span> · Score {j.moduleProgress.score}%</span>}
+            </div>
+          )}
+          {j.lastDeliveredLesson && (
+            <div style={{ marginBottom: 14, padding: '12px 14px', background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.2)' }}>
+              <div className="text-xs text-muted mb-4">Last lesson delivered in class</div>
+              <div style={{ color: 'var(--white)', fontWeight: 600 }}>
+                Lesson {j.lastDeliveredLesson.position}: {j.lastDeliveredLesson.title}
+              </div>
+              {j.lastDeliveredLesson.objective && (
+                <p className="text-sm text-muted" style={{ margin: '8px 0 0' }}>{j.lastDeliveredLesson.objective}</p>
+              )}
+              {renderFiles(lastFiles, 'Class materials')}
+            </div>
+          )}
+          {j.nextLesson && j.nextLesson.id !== j.lastDeliveredLesson?.id && (
+            <div style={{ padding: '12px 14px', background: 'rgba(26,127,212,0.06)', borderRadius: 10, border: '1px solid rgba(26,127,212,0.25)' }}>
+              <div className="text-xs text-muted mb-4">Up next in class</div>
+              <div style={{ color: 'var(--white)', fontWeight: 600 }}>
+                Lesson {j.nextLesson.position}: {j.nextLesson.title}
+              </div>
+              {renderFiles(nextFiles, 'Preview materials')}
+            </div>
+          )}
+        </div>
+      )}
+
+      {lessons.length > 0 && (
+        <div className="card mb-20">
+          <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Lesson checklist</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {lessons.map((L: any) => (
+              <div key={L.id} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border2)', background: L.completed ? 'rgba(34,197,94,0.04)' : 'transparent' }}>
+                <span style={{ fontSize: 18, lineHeight: 1 }}>{L.completed ? '✓' : '○'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: 'var(--white)', fontWeight: 600 }}>Lesson {L.position}: {L.title}</div>
+                  {L.objective && <div className="text-sm text-muted" style={{ marginTop: 4 }}>{L.objective}</div>}
+                  {Array.isArray(L.files) && L.files.length > 0 && (
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {L.files.slice(0, 3).map((f: any, i: number) => (
+                        <a key={i} href={fileHref(f)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: '4px 8px' }}>
+                          ⬇ {f.fileName || 'File'}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {handouts.length > 0 && (
+        <div className="card mb-20">
+          <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Tutor handouts</div>
+          {handouts.map((h: any) => (
+            <details key={h.id} style={{ marginBottom: 12, border: '1px solid var(--border2)', borderRadius: 10, padding: '10px 14px' }}>
+              <summary style={{ cursor: 'pointer', color: 'var(--white)', fontWeight: 600 }}>
+                {h.title}
+                {h.curriculumLesson?.title && <span className="text-muted text-sm" style={{ fontWeight: 400 }}> · {h.curriculumLesson.title}</span>}
+              </summary>
+              <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--muted)', fontSize: 13, marginTop: 12, maxHeight: 320, overflow: 'auto' }}>
+                {h.handoutMarkdown || '—'}
+              </pre>
+            </details>
+          ))}
+        </div>
+      )}
+
       <div className="card">
+        <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>All modules</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           {progress.map((p: any) => (
             <div key={p.id} className="module-progress-card" style={{ borderColor: p.status === 'COMPLETED' ? 'rgba(34,197,94,0.3)' : p.status === 'IN_PROGRESS' ? 'rgba(212,168,83,0.4)' : 'var(--border2)' }}>
@@ -181,23 +264,6 @@ function StudentModules({ progress, student }: { progress: any[]; student: any }
               <p style={{ fontSize: 13, color: 'var(--muted)' }}>{p.module?.description}</p>
               <div className="progress-bar-label"><span>Score</span><strong style={{ color: p.score ? (p.score >= 70 ? 'var(--success)' : 'var(--warning)') : 'var(--muted)' }}>{p.score ? `${p.score}%` : '—'}</strong></div>
               <div className="progress-bar"><div className="progress-fill" style={{ width: p.status === 'COMPLETED' ? '100%' : p.status === 'IN_PROGRESS' ? '40%' : '0%' }}></div></div>
-              {(() => {
-                const relatedPlans = plansArr.filter((plan: any) => plan?.moduleId === p.module?.id)
-                const files = relatedPlans.flatMap((plan: any) => materialsByPlanId[plan.id] || [])
-                if (!files.length) return null
-                return (
-                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--border2)' }}>
-                    <div className="text-xs text-muted mb-8">Lesson Materials</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {files.slice(0, 4).map((f: any, i: number) => (
-                        <a key={`${f.id || f.fileUrl || i}-${i}`} href={f.fileUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ justifyContent: 'flex-start' }}>
-                          ⬇ {f.fileName || `Material ${i + 1}`}
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })()}
             </div>
           ))}
           {progress.length === 0 && <p className="text-muted text-sm" style={{ gridColumn: 'span 2', padding: '40px 0', textAlign: 'center' }}>No modules yet — your tutor will activate them.</p>}
@@ -268,13 +334,13 @@ function StudentAssignments({ student }: { student: any }) {
             {Array.isArray(assignmentFiles[a.id]) && assignmentFiles[a.id].length > 0 && (
               <div style={{ marginBottom: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {assignmentFiles[a.id].map((f: any, i: number) => (
-                  <a key={`${f.id || f.fileUrl || i}-${i}`} href={f.fileUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
+                  <a key={`${f.id || fileHref(f) || i}-${i}`} href={fileHref(f)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
                     ⬇ {f.fileName || `Attachment ${i + 1}`}
                   </a>
                 ))}
               </div>
             )}
-            {a.submission?.grade && <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}><strong style={{ color: '#4ADE80' }}>Grade: {a.submission.grade}%</strong>{a.submission.feedback && <span style={{ color: 'var(--muted)', fontSize: 13, marginLeft: 12 }}>{a.submission.feedback}</span>}</div>}
+            {a.submission?.score != null && <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}><strong style={{ color: '#4ADE80' }}>Score: {a.submission.score}{a.maxScore ? `/${a.maxScore}` : '%'}</strong>{a.submission.feedback && <span style={{ color: 'var(--muted)', fontSize: 13, marginLeft: 12 }}>{a.submission.feedback}</span>}</div>}
             {!a.submission && (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input style={{ flex: 1, minWidth: 200, background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', color: 'var(--white)', fontSize: 13, outline: 'none' }} placeholder="Add a note (optional)…" value={notes[a.id] || ''} onChange={e => setNotes(n => ({ ...n, [a.id]: e.target.value }))} />
@@ -297,6 +363,7 @@ function StudentPracticals({ student }: { student: any }) {
   const [evidenceUrl, setEvidenceUrl] = useState<Record<string, string>>({})
   const [evidenceText, setEvidenceText] = useState<Record<string, string>>({})
   const [evidenceFiles, setEvidenceFiles] = useState<Record<string, File | null>>({})
+  const [retakeOpen, setRetakeOpen] = useState<Record<string, boolean>>({})
 
   const submit = async (taskId: string) => {
     setSubmitting(taskId)
@@ -312,6 +379,9 @@ function StudentPracticals({ student }: { student: any }) {
         evidenceText: evidenceText[taskId] || undefined,
       })
       setEvidenceFiles((prev) => ({ ...prev, [taskId]: null }))
+      setEvidenceUrl((prev) => ({ ...prev, [taskId]: '' }))
+      setEvidenceText((prev) => ({ ...prev, [taskId]: '' }))
+      setRetakeOpen((prev) => ({ ...prev, [taskId]: false }))
       const refreshed = await practicalsApi.myTasks().catch(() => null)
       if (Array.isArray(refreshed)) setData(refreshed as any)
     } catch (e: any) { notify.fromError(e) }
@@ -353,16 +423,66 @@ function StudentPracticals({ student }: { student: any }) {
                 {t.submission.feedback && <span style={{ color: 'var(--muted)', fontSize: 13, marginLeft: 12 }}>{t.submission.feedback}</span>}
               </div>
             )}
-            {!t.submission && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <input className="form-input" placeholder="Evidence URL (optional)" value={evidenceUrl[t.id] || ''} onChange={e => setEvidenceUrl((x) => ({ ...x, [t.id]: e.target.value }))} />
-                <input type="file" onChange={e => setEvidenceFiles((x) => ({ ...x, [t.id]: e.target.files?.[0] || null }))} />
-                <textarea className="form-input" rows={3} placeholder="Evidence notes / what you built (optional)" value={evidenceText[t.id] || ''} onChange={e => setEvidenceText((x) => ({ ...x, [t.id]: e.target.value }))} style={{ resize: 'vertical' }} />
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button onClick={() => submit(t.id)} className="btn btn-primary btn-sm" disabled={submitting === t.id}>{submitting === t.id ? 'Submitting…' : 'Submit Practical →'}</button>
+            {(() => {
+              const hasSubmission = !!t.submission
+              const passScore = Number(t.passScore ?? 50)
+              const totalScore = t.submission?.totalScore
+              const graded = t.submission?.status === 'GRADED' || t.submission?.status === 'PASSED' || t.submission?.status === 'REWORK_REQUIRED'
+              const failed =
+                typeof totalScore === 'number'
+                  ? totalScore < passScore
+                  : t.submission?.status === 'REWORK_REQUIRED'
+              const canRetake = hasSubmission && graded && failed
+              const open = !hasSubmission || !!retakeOpen[t.id]
+              const nextAttempt = (Number(t.submission?.attempt) || 1) + 1
+
+              if (canRetake && !open) {
+                return (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div className="text-muted text-xs">
+                      You can retake this practical (attempt {nextAttempt}) to meet the pass mark ({passScore}%).
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setRetakeOpen((prev) => ({ ...prev, [t.id]: true }))}
+                    >
+                      Resubmit (Retake) →
+                    </button>
+                  </div>
+                )
+              }
+
+              if (!open) return null
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {canRetake && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div className="text-muted text-xs">
+                        Retake attempt {nextAttempt}. Make sure your evidence clearly shows your work.
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setRetakeOpen((prev) => ({ ...prev, [t.id]: false }))}
+                        disabled={submitting === t.id}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                  <input className="form-input" placeholder="Evidence URL (optional)" value={evidenceUrl[t.id] || ''} onChange={e => setEvidenceUrl((x) => ({ ...x, [t.id]: e.target.value }))} />
+                  <input type="file" onChange={e => setEvidenceFiles((x) => ({ ...x, [t.id]: e.target.files?.[0] || null }))} />
+                  <textarea className="form-input" rows={3} placeholder="Evidence notes / what you built (optional)" value={evidenceText[t.id] || ''} onChange={e => setEvidenceText((x) => ({ ...x, [t.id]: e.target.value }))} style={{ resize: 'vertical' }} />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button onClick={() => submit(t.id)} className="btn btn-primary btn-sm" disabled={submitting === t.id}>
+                      {submitting === t.id ? 'Submitting…' : (canRetake ? 'Submit Retake →' : 'Submit Practical →')}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </div>
         ))}
       </div>
@@ -530,13 +650,13 @@ function StudentCertificates({ student, progress }: { student: any; progress: an
             <span style={{ fontSize: 48 }}>🔒</span>
             <div style={{ flex: 1 }}>
               <div className="font-display fw-700 text-white mb-4" style={{ fontSize: 16 }}>{trackName}</div>
-              <div className="text-muted text-sm mb-12">Complete all {progress.length} modules with a passing score (50%+) to earn your certificate.</div>
+              <div className="text-muted text-sm mb-12">Complete all standard modules (50%+ each), then pass the Track Completion Exam (50%+) to become eligible for your certificate.</div>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}><span className="text-muted">Modules completed</span><span className="text-white">{completed.length}/{progress.length}</span></div>
                 <div className="progress-bar"><div className="progress-fill" style={{ width: `${progress.length ? (completed.length / progress.length) * 100 : 0}%` }}></div></div>
               </div>
             </div>
-            <span className="badge badge-warning">{allDone ? 'Ready — ask admin to issue' : 'Locked'}</span>
+            <span className="badge badge-warning">{allDone ? 'Ready — awaiting AdharaEdu authorization' : 'Locked'}</span>
           </div>
         )}
       </div>

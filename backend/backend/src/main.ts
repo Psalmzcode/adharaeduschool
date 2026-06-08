@@ -59,7 +59,7 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  const port = process.env.PORT || 3002;
+  const port = process.env.PORT || 3001;
   await app.listen(port);
   console.log(`\n🚀 AdharaEdu API running on: http://localhost:${port}/api/v1`);
   console.log(`📚 Swagger docs at: http://localhost:${port}/api/docs\n`);

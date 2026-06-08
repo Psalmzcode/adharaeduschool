@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { classPerformanceApi, schoolClassesApi } from '@/lib/api'
+import { classPerformanceApi, schoolClassesApi, schoolTermsApi } from '@/lib/api'
+import { notify } from '@/lib/notify'
 
 export type ClassPerformanceChoice = {
   schoolId: string
@@ -32,6 +33,10 @@ export function ClassPerformancePanel({
   const [loadingClasses, setLoadingClasses] = useState(false)
   const [slot, setSlot] = useState('')
   const [days, setDays] = useState(30)
+  const [termLabel, setTermLabel] = useState('')
+  const [termOptions, setTermOptions] = useState<{ label: string; status: string }[]>([])
+  const [loadingTerms, setLoadingTerms] = useState(false)
+  const [exporting, setExporting] = useState<'csv' | 'pdf' | null>(null)
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<any>(null)
   const [err, setErr] = useState('')
@@ -85,7 +90,41 @@ export function ClassPerformancePanel({
     setSlot('')
     setData(null)
     setErr('')
+    setTermLabel('')
   }, [schoolIdForFetch, presetChoices])
+
+  const activeSchoolId = useMemo(() => {
+    if (schoolIdForFetch) return schoolIdForFetch
+    const sel = options.find((o) => choiceKey(o) === slot)
+    return sel?.schoolId || null
+  }, [schoolIdForFetch, options, slot])
+
+  useEffect(() => {
+    if (!activeSchoolId) {
+      setTermOptions([])
+      return
+    }
+    let cancelled = false
+    setLoadingTerms(true)
+    schoolTermsApi
+      .list(activeSchoolId)
+      .then((res) => {
+        if (cancelled) return
+        const list = Array.isArray(res?.terms) ? res.terms : []
+        setTermOptions(list.map((t: any) => ({ label: t.label, status: t.status })))
+        const active = res?.active?.label
+        if (active) setTermLabel(active)
+      })
+      .catch(() => {
+        if (!cancelled) setTermOptions([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTerms(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeSchoolId])
 
   const load = async () => {
     const sel = options.find((o) => choiceKey(o) === slot)
@@ -100,7 +139,8 @@ export function ClassPerformancePanel({
         schoolId: sel.schoolId,
         className: sel.className,
         track: sel.track,
-        days,
+        days: termLabel ? undefined : days,
+        termLabel: termLabel || undefined,
       })
       setData(r)
     } catch (e: any) {
@@ -108,6 +148,30 @@ export function ClassPerformancePanel({
       setData(null)
     }
     setLoading(false)
+  }
+
+  const exportReport = async (format: 'csv' | 'pdf') => {
+    const sel = options.find((o) => choiceKey(o) === slot)
+    if (!sel) {
+      notify.warning('Select a class first')
+      return
+    }
+    setExporting(format)
+    try {
+      const params = {
+        schoolId: sel.schoolId,
+        className: sel.className,
+        track: sel.track,
+        days: termLabel ? undefined : days,
+        termLabel: termLabel || undefined,
+      }
+      if (format === 'csv') await classPerformanceApi.downloadCsv(params)
+      else await classPerformanceApi.downloadPdf(params)
+      notify.success(format === 'csv' ? 'CSV downloaded' : 'PDF downloaded')
+    } catch (e: any) {
+      notify.fromError(e, 'Export failed')
+    }
+    setExporting(null)
   }
 
   const disabled = !options.length
@@ -134,19 +198,44 @@ export function ClassPerformancePanel({
             </select>
           </div>
           <div>
-            <label className="form-label">Attendance window (days)</label>
-            <input
-              type="number"
-              min={7}
-              max={365}
+            <label className="form-label">Term</label>
+            <select
               className="form-input"
-              style={{ width: 100 }}
-              value={days}
-              onChange={(e) => setDays(Math.min(365, Math.max(7, parseInt(e.target.value, 10) || 30)))}
-            />
+              style={{ minWidth: 180 }}
+              value={termLabel}
+              onChange={(e) => setTermLabel(e.target.value)}
+              disabled={loadingTerms || !termOptions.length}
+            >
+              <option value="">{loadingTerms ? 'Loading…' : termOptions.length ? 'Rolling window' : 'No terms'}</option>
+              {termOptions.map((t) => (
+                <option key={t.label} value={t.label}>
+                  {t.label}{t.status === 'ACTIVE' ? ' (active)' : ''}
+                </option>
+              ))}
+            </select>
           </div>
+          {!termLabel && (
+            <div>
+              <label className="form-label">Attendance window (days)</label>
+              <input
+                type="number"
+                min={7}
+                max={365}
+                className="form-input"
+                style={{ width: 100 }}
+                value={days}
+                onChange={(e) => setDays(Math.min(365, Math.max(7, parseInt(e.target.value, 10) || 30)))}
+              />
+            </div>
+          )}
           <button type="button" className="btn btn-primary btn-sm" disabled={loading || !slot} onClick={() => load()}>
             {loading ? 'Loading…' : 'Load report'}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={!slot || exporting === 'csv'} onClick={() => exportReport('csv')}>
+            {exporting === 'csv' ? 'Exporting…' : 'Export CSV'}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={!slot || exporting === 'pdf'} onClick={() => exportReport('pdf')}>
+            {exporting === 'pdf' ? 'Exporting…' : 'Term PDF'}
           </button>
         </div>
         {err && <p className="text-muted text-sm mt-12" style={{ color: '#F87171' }}>{err}</p>}
@@ -167,13 +256,14 @@ export function ClassPerformancePanel({
               </h4>
               <p className="text-muted text-sm">
                 {trackLabel(data.track)} · {data.studentCount} student{data.studentCount === 1 ? '' : 's'}
+                {data.term?.label ? ` · ${data.term.label}` : ''}
               </p>
             </div>
           </div>
 
           <div className="stats-row" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
             <div className="stat-card">
-              <div className="stat-card-label">Attendance ({data.windowDays}d)</div>
+              <div className="stat-card-label">Attendance ({data.term?.label ? 'term' : `${data.windowDays}d`})</div>
               <div className="stat-card-value">
                 {data.attendance?.ratePercent != null ? `${data.attendance.ratePercent}%` : '—'}
               </div>

@@ -31,14 +31,16 @@ const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;u
       ]},
       {label:'Program', items:[
         {icon:'🏫',label:'Tutors',section:'tutors'},
+        {icon:'⏱️',label:'Tutor delivery',section:'tutor-delivery'},
         {icon:'📢',label:'Announcements',section:'announcements',badge:'!',badgeStyle:{background:'rgba(239,68,68,0.2)',color:'#F87171'}},
-        {icon:'🎓',label:'Certificates',section:'certificates'},
         {icon:'📤',label:'Bulk Upload',section:'bulk-upload'},
         {icon:'📋',label:'Reports',section:'reports'},
         {icon:'📈',label:'Class performance',section:'class-insights'},
+        {icon:'📆',label:'Terms',section:'terms'},
       ]},
       {label:'System', items:[
         {icon:'🏛️',label:'School profile',section:'school-profile'},
+        {icon:'📜',label:'Audit log',section:'audit-log'},
         {icon:'⚙️',label:'Settings',section:'settings'},
       ]},
     ]
@@ -98,6 +100,19 @@ const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;u
         {icon:'📅',label:'Exam Schedule',section:'parent-exams'},
         {icon:'📢',label:'School Notices',section:'parent-notices'},
         {icon:'⚙️',label:'Settings',section:'parent-settings'},
+      ]},
+    ]
+  },
+  curriculum: {
+    user:'Curriculum Author', userRole:'Curriculum Lead',
+    groups:[
+      {label:'Content', items:[
+        {icon:'🖥️',label:'Modules & Lessons',section:'cbt'},
+        {icon:'🧭',label:'Program Tracks',section:'tracks'},
+        {icon:'🎓',label:'Certificates',section:'certificates'},
+      ]},
+      {label:'Account', items:[
+        {icon:'⚙️',label:'Settings',section:'settings'},
       ]},
     ]
   },
@@ -186,7 +201,6 @@ export function DashboardShell({ role, title, subtitle, section, onSectionChange
   return (
     <div style={{display:'flex',minHeight:'100vh'}} className="page dashboard-page active">
       {sidebarOpen && <div className="sidebar-overlay open" onClick={()=>setSidebarOpen(false)} style={{display:'block'}}></div>}
-      <button className="sidebar-toggle" onClick={()=>setSidebarOpen(!sidebarOpen)} aria-label="Menu">☰</button>
 
       <aside className={`sidebar${sidebarOpen?' open':''}`}>
         <div className="sidebar-logo">
@@ -255,15 +269,46 @@ export function DashboardShell({ role, title, subtitle, section, onSectionChange
 
       <div className="dashboard-main">
         <div className="topbar">
-          <div className="topbar-title">
-            <h2>{title}</h2>
-            {subtitle && <p>{subtitle}</p>}
+          <div className="topbar-left">
+            <button
+              type="button"
+              className="sidebar-toggle"
+              onClick={() => setSidebarOpen((o) => !o)}
+              aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={sidebarOpen}
+            >
+              ☰
+            </button>
+            <a
+              href="/"
+              className="dashboard-topbar-mark"
+              aria-label="AdharaEdu home"
+              onClick={(e) => {
+                e.preventDefault()
+                router.push('/')
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 50" height="34" width="170" aria-hidden>
+                <rect x="1" y="4" width="38" height="40" rx="12" ry="14" fill="#1E7FD4" />
+                <polygon points="20,10 23.5,18.5 33,18.5 25.5,24 28.5,33 20,27.5 11.5,33 14.5,24 7,18.5 16.5,18.5" fill="#F5C518" />
+                <text x="46" y="33" fontFamily="Arial Black,sans-serif" fontWeight="900" fontSize="26" fill="var(--white)" className="logo-adhara">
+                  Adhara
+                </text>
+                <text x="153" y="14" fontFamily="Arial,sans-serif" fontWeight="700" fontStyle="italic" fontSize="12" fill="#1E7FD4">
+                  Edu
+                </text>
+              </svg>
+            </a>
+            <div className="topbar-title">
+              <h2 className="topbar-title-text">{title}</h2>
+              {subtitle && <p className="topbar-subtitle">{subtitle}</p>}
+            </div>
           </div>
           <div className="topbar-right">
             {topbarRight}
-            <button onClick={toggleTheme} className="topbar-icon-btn" title="Toggle theme" style={{fontSize:16}}>{theme==='dark'?'☀️':'🌙'}</button>
-            <div className="topbar-icon-btn" style={{position:'relative'}}>🔔<div className="topbar-notif-badge"></div></div>
-            <div className="topbar-icon-btn">🔍</div>
+            <button type="button" onClick={toggleTheme} className="topbar-icon-btn topbar-icon-btn--theme" title="Toggle theme" style={{fontSize:16}}>{theme==='dark'?'☀️':'🌙'}</button>
+            <div className="topbar-icon-btn topbar-icon-btn--bell" style={{position:'relative'}} aria-hidden>🔔<div className="topbar-notif-badge"></div></div>
+            <div className="topbar-icon-btn topbar-icon-btn--search" aria-hidden>🔍</div>
             <div className="topbar-profile-menu" ref={profileMenuRef}>
               <button className="topbar-profile-btn" onClick={()=>setProfileMenuOpen(!profileMenuOpen)} title="Account menu">
                 {showTopbarImage ? (

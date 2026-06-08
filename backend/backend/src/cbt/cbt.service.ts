@@ -3,121 +3,62 @@ import { EmailService } from '../email/email.service';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveModuleRef, toCbtTitle } from '../common/module-content';
+import { geminiGenerateJson } from '../common/gemini-json.client';
 
 @Injectable()
 export class CbtService {
   constructor(private prisma: PrismaService, private emailService: EmailService, private config: ConfigService) {}
-  private geminiModelCache: string | null = null;
 
-  private geminiKey() {
-    const k = (this.config.get<string>('GEMINI_API_KEY') || '').trim();
-    if (!k) throw new BadRequestException('AI is not configured (missing GEMINI_API_KEY)');
-    return k;
-  }
-
-  /** Optional override(s): comma-separated models, e.g. "gemini-2.5-flash,gemini-2.5-flash-lite". */
-  private preferredGeminiModels(): string[] {
-    const raw = (this.config.get<string>('GEMINI_MODEL') || '').trim();
-    if (!raw) return [];
-    return raw
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((m) => (m.startsWith('models/') ? m : `models/${m}`));
-  }
-
-  private async resolveGeminiModelName(): Promise<string> {
-    const overrides = this.preferredGeminiModels();
-    if (overrides.length) return overrides[0];
-    if (this.geminiModelCache) return this.geminiModelCache;
-
-    const key = this.geminiKey();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
-    const res = await fetch(url);
-    const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new BadRequestException(data?.error?.message || 'Gemini ListModels failed');
+  private shuffle<T>(arr: T[], rand: () => number): T[] {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
     }
-
-    const models: any[] = Array.isArray(data?.models) ? data.models : [];
-    const supportsGenerate = (m: any) =>
-      Array.isArray(m?.supportedGenerationMethods) &&
-      m.supportedGenerationMethods.includes('generateContent') &&
-      typeof m?.name === 'string';
-
-    // Prefer a "flash" model for speed/cost
-    const preferred =
-      models.find((m) => supportsGenerate(m) && /flash/i.test(String(m.name))) ||
-      models.find((m) => supportsGenerate(m) && /gemini/i.test(String(m.name))) ||
-      models.find((m) => supportsGenerate(m));
-
-    const name = preferred?.name;
-    if (!name) throw new BadRequestException('No Gemini model supports generateContent for this API key');
-
-    this.geminiModelCache = name;
-    return name;
+    return a;
   }
 
-  private isRetryableGeminiError(status: number, message: string) {
-    const msg = (message || '').toLowerCase();
-    // Observed: "high demand" / 429 / 503 spikes
-    return status === 429 || status === 503 || msg.includes('high demand') || msg.includes('resource exhausted');
+  private xorshift32(seed: number) {
+    let x = seed || 123456789;
+    return () => {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      return ((x >>> 0) % 1_000_000) / 1_000_000;
+    };
   }
 
-  private async sleep(ms: number) {
-    await new Promise((r) => setTimeout(r, ms));
+  private buildAttemptVariant(questions: Array<{ number: number; options: string[] }>, seed: number) {
+    const rand = this.xorshift32(seed);
+    const questionOrder = this.shuffle(questions.map((q) => q.number), rand);
+    const optionOrder: Record<string, number[]> = {};
+    for (const q of questions) {
+      const idxs = q.options.map((_, i) => i);
+      optionOrder[String(q.number)] = this.shuffle(idxs, rand);
+    }
+    return { seed, questionOrder, optionOrder };
   }
 
-  private async geminiJson(prompt: string): Promise<{ jsonText: string; modelUsed: string }> {
-    const key = this.geminiKey();
-    const overrides = this.preferredGeminiModels();
-    const modelsToTry = overrides.length
-      ? overrides
-      : [await this.resolveGeminiModelName()];
+  private applyVariantToQuestions(
+    questions: Array<{ id: string; number: number; questionText: string; options: string[] }>,
+    variant: any,
+  ) {
+    const byNum = new Map<number, any>(questions.map((q) => [q.number, q]));
+    const orderedNums: number[] = Array.isArray(variant?.questionOrder)
+      ? variant.questionOrder.map((n: any) => Number(n)).filter((n: any) => Number.isFinite(n))
+      : questions.map((q) => q.number);
+    const seen = new Set<number>();
+    const safeOrder = orderedNums.filter((n) => (byNum.has(n) && !seen.has(n) ? (seen.add(n), true) : false));
+    for (const q of questions) if (!seen.has(q.number)) safeOrder.push(q.number);
 
-    const body = JSON.stringify({
-      generationConfig: {
-        temperature: 0.4,
-        responseMimeType: 'application/json',
-      },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    return safeOrder.map((n) => {
+      const q = byNum.get(n);
+      const ord = variant?.optionOrder?.[String(n)];
+      const idxs: number[] =
+        Array.isArray(ord) && ord.length === q.options.length ? ord : q.options.map((_: any, i: number) => i);
+      const options = idxs.map((i) => q.options[i]);
+      return { ...q, options };
     });
-
-    let lastErr: any = null;
-    for (let mi = 0; mi < modelsToTry.length; mi++) {
-      const modelName = modelsToTry[mi];
-      // Try each model up to 3 times on transient demand spikes
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${encodeURIComponent(key)}`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body,
-        });
-        const data: any = await res.json().catch(() => ({}));
-        if (res.ok) {
-          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!text) throw new BadRequestException('Gemini returned empty response');
-          return { jsonText: text, modelUsed: modelName };
-        }
-
-        const msg = data?.error?.message || 'Gemini request failed';
-        lastErr = { status: res.status, msg, modelName };
-        if (!this.isRetryableGeminiError(res.status, msg)) {
-          throw new BadRequestException(msg);
-        }
-        // backoff: 800ms, 1600ms, 3000ms
-        const delay = attempt === 0 ? 800 : attempt === 1 ? 1600 : 3000;
-        await this.sleep(delay);
-      }
-      // after retries, fall through to next model
-    }
-
-    throw new BadRequestException(
-      lastErr?.msg
-        ? `Gemini failed after retries (last model ${lastErr.modelName}): ${lastErr.msg}`
-        : 'Gemini request failed after retries',
-    );
   }
 
   async generateQuestions(data: {
@@ -144,15 +85,16 @@ export class CbtService {
 
     if (requested.length) {
       moduleIds = Array.from(new Set([moduleId, ...requested]));
-    } else if ((root as any).moduleType === 'TERM_EXAM') {
-      // Default for term exam: include all standard modules for this track (exclude exam modules by number range)
+    } else if (
+      (root as any).moduleType === 'TERM_EXAM' ||
+      (root as any).moduleType === 'TRACK_COMPLETION_EXAM'
+    ) {
       const list = await this.prisma.module.findMany({
         where: {
           track: root.track as any,
-          stackVariant: 'COMMON' as any,
-          number: { lt: 90 },
+          moduleType: 'STANDARD' as any,
         } as any,
-        orderBy: [{ number: 'asc' }],
+        orderBy: [{ number: 'asc' }, { stackVariant: 'asc' }],
         select: { id: true },
       });
       moduleIds = list.map((m) => m.id);
@@ -191,7 +133,7 @@ export class CbtService {
       `- Explanations should be 1–2 sentences.`,
     ].join('\n');
 
-    const { jsonText: rawJson, modelUsed } = await this.geminiJson(prompt);
+    const { jsonText: rawJson, modelUsed } = await geminiGenerateJson(this.config, prompt, { temperature: 0.4 });
     let parsed: any;
     try {
       parsed = JSON.parse(rawJson);
@@ -221,6 +163,11 @@ export class CbtService {
     });
     if (!tutor) throw new BadRequestException('Tutor profile not found');
     const moduleRef = await resolveModuleRef(this.prisma, data?.moduleId);
+    const coveredModuleIds = Array.isArray(data?.coveredModuleIds)
+      ? data.coveredModuleIds.map((x: any) => String(x || '').trim()).filter(Boolean)
+      : Array.isArray(data?.includeModuleIds)
+        ? data.includeModuleIds.map((x: any) => String(x || '').trim()).filter(Boolean)
+        : [];
     return this.prisma.cBTExam.create({
       data: {
         tutorId: tutor.id,
@@ -229,6 +176,7 @@ export class CbtService {
         track: moduleRef.track as any,
         durationMins: data.durationMins || 30,
         moduleId: moduleRef.moduleId,
+        coveredModuleIds,
         scheduledFor: data.scheduledFor,
         totalQuestions: data.questions.length,
         questions: {
@@ -306,18 +254,40 @@ export class CbtService {
     if (!exam) throw new NotFoundException('Exam not found');
     if (!exam.isPublished) throw new BadRequestException('Exam is not yet published');
     const student = await this.prisma.student.findUnique({ where: { id: studentId }, select: { termLabel: true } });
-    const completed = await this.prisma.examAttempt.findFirst({
-      where: { cbtExamId, studentId, status: 'COMPLETED' },
-    });
-    if (completed) {
-      throw new BadRequestException(
-        'You have already completed this exam. Retakes are not allowed.',
-      );
+    if (examScheduleId) {
+      const schedule = await this.prisma.examSchedule.findUnique({
+        where: { id: String(examScheduleId) },
+        select: { id: true, maxAttempts: true },
+      });
+      if (!schedule) throw new BadRequestException('Exam schedule not found');
+      const maxAttempts = Math.max(1, Math.min(3, Math.floor(Number(schedule.maxAttempts) || 1)));
+      const completedCount = await this.prisma.examAttempt.count({
+        where: { cbtExamId, studentId, examScheduleId: schedule.id, status: 'COMPLETED' },
+      });
+      if (completedCount >= maxAttempts) {
+        throw new BadRequestException('Maximum retake attempts reached for this scheduled exam');
+      }
+    } else {
+      const completed = await this.prisma.examAttempt.findFirst({
+        where: { cbtExamId, studentId, status: 'COMPLETED' },
+      });
+      if (completed) {
+        throw new BadRequestException('You have already completed this exam. Retakes are not allowed.');
+      }
     }
+
     const existing = await this.prisma.examAttempt.findFirst({
-      where: { cbtExamId, studentId, status: 'IN_PROGRESS' },
+      where: { cbtExamId, studentId, status: 'IN_PROGRESS', ...(examScheduleId ? { examScheduleId } : {}) },
     });
     if (existing) return existing;
+
+    const qs = await this.prisma.cBTQuestion.findMany({
+      where: { examId: cbtExamId },
+      orderBy: { number: 'asc' },
+      select: { number: true, options: true },
+    });
+    const seed = (Date.now() ^ Math.floor(Math.random() * 1_000_000)) >>> 0;
+    const variant = this.buildAttemptVariant(qs as any, seed);
     return this.prisma.examAttempt.create({
       data: {
         cbtExamId,
@@ -326,6 +296,7 @@ export class CbtService {
         answers: {},
         status: 'IN_PROGRESS',
         termLabel: student?.termLabel || null,
+        variant,
       },
     });
   }
@@ -371,9 +342,14 @@ export class CbtService {
       const answers = (attempt.answers as Record<string, number>) || {};
       const questions = attempt.cbtExam.questions;
       const breakdown = questions.map((q: any) => {
-        const selected = answers[String(q.number)];
-        const isCorrect = selected === q.correctIndex;
-        return { questionNumber: q.number, selected: selected ?? null, correct: q.correctIndex, isCorrect, explanation: q.explanation };
+      const selectedPresented = answers[String(q.number)];
+      const ord: number[] | undefined = (attempt as any)?.variant?.optionOrder?.[String(q.number)];
+      const selectedOriginal =
+        typeof selectedPresented === 'number' && Array.isArray(ord) && ord.length === q.options.length
+          ? ord[selectedPresented]
+          : selectedPresented;
+      const isCorrect = selectedOriginal === q.correctIndex;
+      return { questionNumber: q.number, selected: selectedPresented ?? null, correct: q.correctIndex, isCorrect, explanation: q.explanation };
       });
       return this.buildCompletedExamResponse(attempt, breakdown, questions.length);
     }
@@ -381,10 +357,15 @@ export class CbtService {
     const questions = attempt.cbtExam.questions;
     let correct = 0;
     const breakdown = questions.map((q: any) => {
-      const selected = answers[String(q.number)];
-      const isCorrect = selected === q.correctIndex;
+      const selectedPresented = answers[String(q.number)];
+      const ord: number[] | undefined = (attempt as any)?.variant?.optionOrder?.[String(q.number)];
+      const selectedOriginal =
+        typeof selectedPresented === 'number' && Array.isArray(ord) && ord.length === q.options.length
+          ? ord[selectedPresented]
+          : selectedPresented;
+      const isCorrect = selectedOriginal === q.correctIndex;
       if (isCorrect) correct++;
-      return { questionNumber: q.number, selected: selected ?? null, correct: q.correctIndex, isCorrect, explanation: q.explanation };
+      return { questionNumber: q.number, selected: selectedPresented ?? null, correct: q.correctIndex, isCorrect, explanation: q.explanation };
     });
     const score = Math.round((correct / questions.length) * 100);
     const timeTaken = Math.round((Date.now() - attempt.startedAt.getTime()) / 1000);
@@ -406,10 +387,13 @@ export class CbtService {
       include: { user: { select: { firstName: true, lastName: true } } },
     });
     if (!student) throw new BadRequestException('Student not found');
-    const exam = await this.findOne(examId);
     const expectedToken = regNumber.split('/').pop();
     if (token !== expectedToken) throw new BadRequestException('Invalid exam token');
     const attempt = await this.startExam(examId, student.id);
+    const exam = await this.findOne(examId);
+    if ((attempt as any)?.variant) {
+      exam.questions = this.applyVariantToQuestions(exam.questions as any, (attempt as any).variant) as any;
+    }
     return { student: { name: `${student.user.firstName} ${student.user.lastName}`, regNumber }, exam, attempt };
   }
 
@@ -469,8 +453,11 @@ export class CbtService {
     }
 
     const examId = schedule.cbtExamId;
-    const exam = await this.findOne(examId);
     const attempt = await this.startExam(examId, student.id, schedule.id);
+    const exam = await this.findOne(examId);
+    if ((attempt as any)?.variant) {
+      exam.questions = this.applyVariantToQuestions(exam.questions as any, (attempt as any).variant) as any;
+    }
     return {
       student: { name: `${student.user.firstName} ${student.user.lastName}`, regNumber },
       exam,
@@ -480,6 +467,7 @@ export class CbtService {
         scheduledAt: schedule.scheduledAt,
         venue: schedule.venue,
         durationMins: schedule.durationMins,
+        maxAttempts: (schedule as any).maxAttempts,
         awaitTutorResultRelease: schedule.awaitTutorResultRelease,
         resultsReleasedAt: schedule.resultsReleasedAt,
       },
@@ -511,9 +499,14 @@ export class CbtService {
     const answers = (attempt.answers as Record<string, number>) || {};
     const questions = attempt.cbtExam.questions;
     const breakdown = questions.map((q: any) => {
-      const selected = answers[String(q.number)];
-      const isCorrect = selected === q.correctIndex;
-      return { questionNumber: q.number, selected: selected ?? null, correct: q.correctIndex, isCorrect, explanation: q.explanation };
+      const selectedPresented = answers[String(q.number)];
+      const ord: number[] | undefined = (attempt as any)?.variant?.optionOrder?.[String(q.number)];
+      const selectedOriginal =
+        typeof selectedPresented === 'number' && Array.isArray(ord) && ord.length === q.options.length
+          ? ord[selectedPresented]
+          : selectedPresented;
+      const isCorrect = selectedOriginal === q.correctIndex;
+      return { questionNumber: q.number, selected: selectedPresented ?? null, correct: q.correctIndex, isCorrect, explanation: q.explanation };
     });
 
     if (!privileged && this.isScheduleResultsPending(attempt.examSchedule)) {
@@ -529,11 +522,29 @@ export class CbtService {
     return { ...attempt, breakdown, totalQuestions: questions.length };
   }
 
-  async getExamAttempts(cbtExamId: string) {
+  async getExamAttempts(cbtExamId: string, actor: { sub: string; role: string }) {
+    const exam = await this.prisma.cBTExam.findUnique({
+      where: { id: cbtExamId },
+      select: { id: true, tutor: { select: { userId: true } } },
+    });
+    if (!exam) throw new NotFoundException('Exam not found');
+    if (actor.role === 'TUTOR' && exam.tutor.userId !== actor.sub) {
+      throw new ForbiddenException('You do not have access to this exam');
+    }
     return this.prisma.examAttempt.findMany({
       where: { cbtExamId, status: 'COMPLETED' },
-      include: { student: { include: { user: { select: { firstName: true, lastName: true } } } } },
-      orderBy: { score: 'desc' },
+      include: {
+        student: {
+          select: {
+            regNumber: true,
+            className: true,
+            schoolId: true,
+            track: true,
+            user: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+      orderBy: [{ score: 'desc' }, { submittedAt: 'desc' }],
     });
   }
 }

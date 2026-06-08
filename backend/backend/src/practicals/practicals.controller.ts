@@ -59,6 +59,13 @@ export class PracticalsController {
     });
   }
 
+  @Get('ai-review-queue')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  aiReviewQueue(@Request() req) {
+    return this.service.listAiReviewQueue(req.user.sub);
+  }
+
   @Patch('submissions/:id/grade')
   @UseGuards(RolesGuard)
   @Roles('TUTOR', 'SCHOOL_ADMIN')
@@ -67,7 +74,24 @@ export class PracticalsController {
       totalScore: body.totalScore,
       feedback: body.feedback,
       scoreBreakdown: body.scoreBreakdown,
-    });
+    }, req.user.role);
+  }
+
+  @Post('submissions/:id/ai-grade')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  aiGrade(@Param('id') id: string, @Request() req) {
+    return this.service.proposeAiGrade(id, req.user.sub);
+  }
+
+  @Patch('submissions/:id/approve-ai-grade')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR', 'SCHOOL_ADMIN')
+  approveAiGrade(@Param('id') id: string, @Request() req, @Body() body: any) {
+    return this.service.approveAiGrade(id, req.user.sub, {
+      totalScore: body.totalScore,
+      feedback: body.feedback,
+    }, req.user.role);
   }
 
   @Patch('tasks/:id/bulk-grade')
@@ -79,6 +103,6 @@ export class PracticalsController {
       totalScore: body.totalScore,
       feedback: body.feedback,
       scoreBreakdown: body.scoreBreakdown,
-    });
+    }, req.user.role);
   }
 }

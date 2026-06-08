@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ClassAssignmentsService } from './assignments.service';
 import { JwtAuthGuard, RolesGuard, Roles, TutorOnboardingGuard } from '../auth/guards/jwt-auth.guard';
@@ -73,7 +73,21 @@ export class ClassAssignmentsController {
   @Patch('submissions/:id/grade')
   @UseGuards(RolesGuard)
   @Roles('TUTOR', 'SCHOOL_ADMIN')
-  grade(@Param('id') id: string, @Body('score') score: number, @Body('feedback') feedback: string) {
-    return this.service.grade(id, score, feedback);
+  grade(@Request() req, @Param('id') id: string, @Body('score') score: number, @Body('feedback') feedback: string) {
+    return this.service.grade(id, score, feedback, { userId: req.user.sub, role: req.user.role });
+  }
+
+  @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  update(@Param('id') id: string, @Request() req, @Body() body: any) {
+    return this.service.update(id, req.user.sub, body);
+  }
+
+  @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  remove(@Param('id') id: string, @Request() req) {
+    return this.service.delete(id, req.user.sub);
   }
 }

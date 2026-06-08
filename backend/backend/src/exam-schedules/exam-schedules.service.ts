@@ -43,6 +43,8 @@ export class ExamSchedulesService {
     scheduledAt: string; venue?: string; durationMins?: number;
     /** When true, students see “submitted” but not score until tutor releases. Default false = immediate results. */
     awaitTutorResultRelease?: boolean;
+    /** Max attempts per student for this schedule (1–3). Default 1. */
+    maxAttempts?: number;
   }) {
     const classNames: string[] = Array.isArray(data.classNames)
       ? Array.from(new Set(data.classNames.map((c: any) => String(c || '').trim()).filter(Boolean)))
@@ -58,6 +60,7 @@ export class ExamSchedulesService {
           scheduledAt: parseLagosScheduledAt(data.scheduledAt),
           venue: data.venue,
           durationMins: data.durationMins || 60,
+          maxAttempts: Math.max(1, Math.min(3, Math.floor(Number(data.maxAttempts) || 1))),
           createdBy,
           awaitTutorResultRelease: !!data.awaitTutorResultRelease,
         },

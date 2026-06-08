@@ -1,15 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
-import { TrackLevel } from '@prisma/client';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { AcademicAuditAction, ModuleStackVariant, ModuleType, TrackLevel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AcademicAuditService, AuditActor } from '../academic-audit/academic-audit.service';
 import { modulesWhereForTrack } from '../common/module-curriculum';
 import { EmailService } from '../email/email.service';
 import { ConfigService } from '@nestjs/config';
 import * as QRCode from 'qrcode';
-import * as pdfMake from 'pdfmake/build/pdfmake';
-import * as pdfFonts from 'pdfmake/build/vfs_fonts';
 import { v4 as uuidv4 } from 'uuid';
-
-(pdfMake as any).vfs = (pdfFonts as any).pdfMake?.vfs || pdfFonts;
+import { certificateArtForTrack, certificateGrade, formatCertDate } from './certificate-track-art';
+import { generateCertificatePdf } from './certificate-pdf.generator';
 
 @Injectable()
 export class CertificatesService {
@@ -17,7 +16,37 @@ export class CertificatesService {
     private prisma: PrismaService,
     private emailService: EmailService,
     private config: ConfigService,
+    private audit: AcademicAuditService,
   ) {}
+
+  private static readonly COMPLETION_EXAM_PASS = 50;
+
+  private async trackCompletionExamModule(track: TrackLevel) {
+    return this.prisma.module.findFirst({
+      where: {
+        track,
+        moduleType: ModuleType.TRACK_COMPLETION_EXAM,
+        stackVariant: ModuleStackVariant.COMMON,
+      },
+      select: { id: true, title: true },
+    });
+  }
+
+  private async bestTrackCompletionExamScore(studentId: string, completionModuleId: string): Promise<number | null> {
+    const attempt = await this.prisma.examAttempt.findFirst({
+      where: {
+        studentId,
+        status: 'COMPLETED',
+        score: { not: null },
+        cbtExam: { moduleId: completionModuleId },
+      },
+      orderBy: [{ score: 'desc' }, { submittedAt: 'desc' }],
+      select: { score: true },
+    });
+    if (attempt?.score == null) return null;
+    const score = Number(attempt.score);
+    return Number.isNaN(score) ? null : score;
+  }
 
   // Check if a student qualifies for a certificate
   async checkEligibility(studentId: string) {
@@ -41,9 +70,16 @@ export class CertificatesService {
     }
 
     const eligible: string[] = [];
+    const blockers: Record<string, string> = {};
+    const passMark = CertificatesService.COMPLETION_EXAM_PASS;
+
     for (const [track, mods] of Object.entries(trackGroups)) {
+      const trackLevel = track as TrackLevel;
       const expected = await this.prisma.module.findMany({
-        where: modulesWhereForTrack(track as TrackLevel, student.track3Stack),
+        where: {
+          ...modulesWhereForTrack(trackLevel, student.track3Stack),
+          moduleType: ModuleType.STANDARD,
+        },
         select: { id: true },
       });
       const expectedIds = new Set(expected.map((m) => m.id));
@@ -51,15 +87,39 @@ export class CertificatesService {
       const completed = inTrack.filter((m) => m.status === 'COMPLETED');
       const scores = completed.map((m) => m.score || 0);
       const avg = scores.length ? scores.reduce((a, b) => a + b) / scores.length : 0;
-      if (completed.length === expected.length && expected.length > 0 && avg >= 50) {
-        eligible.push(track);
+
+      if (expected.length === 0) {
+        blockers[track] = 'No standard modules defined for this track';
+        continue;
       }
+      if (completed.length !== expected.length) {
+        blockers[track] = `Standard modules incomplete (${completed.length}/${expected.length})`;
+        continue;
+      }
+      if (avg < passMark) {
+        blockers[track] = `Module average below ${passMark}% (${Math.round(avg)}%)`;
+        continue;
+      }
+
+      const completionMod = await this.trackCompletionExamModule(trackLevel);
+      if (!completionMod) {
+        blockers[track] = 'Track completion exam not configured for this track';
+        continue;
+      }
+      const completionScore = await this.bestTrackCompletionExamScore(studentId, completionMod.id);
+      if (completionScore == null || completionScore < passMark) {
+        const shown = completionScore == null ? 'not attempted' : `${completionScore}%`;
+        blockers[track] = `Track completion exam required (≥${passMark}%) — current: ${shown}`;
+        continue;
+      }
+
+      eligible.push(track);
     }
-    return { eligible: eligible.length > 0, tracks: eligible };
+    return { eligible: eligible.length > 0, tracks: eligible, blockers };
   }
 
   // Issue certificate for a track
-  async issueCertificate(studentId: string, track: string) {
+  async issueCertificate(studentId: string, track: string, actor?: AuditActor) {
     // Check not already issued
     const existing = await this.prisma.certificate.findFirst({
       where: { studentId, track, isRevoked: false },
@@ -69,7 +129,10 @@ export class CertificatesService {
     // Verify eligibility
     const eligibility = await this.checkEligibility(studentId);
     if (!eligibility.tracks?.includes(track)) {
-      throw new BadRequestException('Student has not completed all modules for this track');
+      throw new BadRequestException(
+        eligibility.blockers?.[track] ||
+          'Student has not met certificate requirements for this track',
+      );
     }
 
     // Get student details
@@ -86,23 +149,24 @@ export class CertificatesService {
     const scores = student.moduleProgress.map(p => p.score || 0);
     const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
     const serialNumber = `ADH-CERT-${new Date().getFullYear()}-${uuidv4().split('-')[0].toUpperCase()}`;
-    const trackName = track.replace('TRACK_', 'Track ');
+    const art = certificateArtForTrack(track);
+    const trackName = art.trackLabel;
     const frontendUrl = this.config.get('FRONTEND_URL', 'http://localhost:3000');
 
-    // Generate QR code
     const verifyUrl = `${frontendUrl}/verify-certificate/${serialNumber}`;
     const qrDataUrl = await QRCode.toDataURL(verifyUrl, { width: 150, margin: 1 });
 
-    // Generate PDF
-    const pdfBytes = await this.generatePDF({
+    const pdfBytes = await generateCertificatePdf({
       studentName: `${student.user.firstName} ${student.user.lastName}`,
       regNumber: student.regNumber,
       schoolName: student.school.name,
-      track: trackName,
+      trackLabel: trackName,
       averageScore: avg,
       serialNumber,
       issueDate: new Date(),
       qrDataUrl,
+      verifyUrl,
+      art,
     });
 
     // Upload to Cloudinary
@@ -143,7 +207,83 @@ export class CertificatesService {
       });
     }
 
+    if (actor) {
+      await this.audit.log({
+        schoolId: student.schoolId,
+        actor,
+        action: AcademicAuditAction.CERT_ISSUE,
+        className: student.className,
+        studentId,
+        summary: `Issued ${track.replace('TRACK_', 'Track ')} certificate for ${student.user.firstName} ${student.user.lastName} (${serialNumber})`,
+        metadata: { track, serialNumber, averageScore: avg },
+      });
+    }
+
     return { ...cert, pdfBytes: pdfUrl ? undefined : pdfBytes.toString('base64') };
+  }
+
+  async bulkIssueEligible(
+    schoolId: string,
+    actor: AuditActor,
+    opts?: { className?: string; track?: string },
+  ) {
+    const where: { schoolId: string; className?: string; track?: TrackLevel } = { schoolId };
+    const cn = opts?.className?.trim();
+    const tr = opts?.track?.trim().toUpperCase();
+    if (cn) where.className = cn;
+    if (tr && Object.values(TrackLevel).includes(tr as TrackLevel)) {
+      where.track = tr as TrackLevel;
+    }
+
+    const students = await this.prisma.student.findMany({
+      where,
+      select: {
+        id: true,
+        track: true,
+        className: true,
+        user: { select: { firstName: true, lastName: true } },
+      },
+    });
+
+    const issued: any[] = [];
+    const skipped: Array<{ studentId: string; name: string; reason: string }> = [];
+    const failed: Array<{ studentId: string; name: string; error: string }> = [];
+
+    for (const s of students) {
+      const name = `${s.user?.firstName || ''} ${s.user?.lastName || ''}`.trim() || s.id;
+      const track = (where.track || s.track) as string;
+      try {
+        const elig = await this.checkEligibility(s.id);
+        if (!elig.tracks?.includes(track)) {
+          skipped.push({ studentId: s.id, name, reason: 'Not eligible for track' });
+          continue;
+        }
+        const existing = await this.prisma.certificate.findFirst({
+          where: { studentId: s.id, track, isRevoked: false },
+        });
+        if (existing) {
+          skipped.push({ studentId: s.id, name, reason: 'Already issued' });
+          continue;
+        }
+        const cert = await this.issueCertificate(s.id, track, actor);
+        issued.push(cert);
+      } catch (e: any) {
+        failed.push({ studentId: s.id, name, error: e?.message || 'Issue failed' });
+      }
+    }
+
+    if (issued.length) {
+      await this.audit.log({
+        schoolId,
+        actor,
+        action: AcademicAuditAction.BULK_CERT_ISSUE,
+        className: cn || undefined,
+        summary: `Bulk issued ${issued.length} certificate(s)${cn ? ` for ${cn}` : ''}`,
+        metadata: { issued: issued.length, skipped: skipped.length, failed: failed.length, track: tr || null },
+      });
+    }
+
+    return { issued: issued.length, skipped, failed, certificates: issued };
   }
 
   async findByStudent(studentId: string) {
@@ -185,12 +325,7 @@ export class CertificatesService {
     if (!cert) throw new NotFoundException('Certificate not found');
     if (cert.isRevoked) return cert;
 
-    if (actor.role === 'SCHOOL_ADMIN') {
-      const canManage = cert.student.school.admins.some((a) => a.id === actor.userId);
-      if (!canManage) throw new ForbiddenException('You can only revoke certificates from your school');
-    }
-
-    return this.prisma.certificate.update({
+    const updated = await this.prisma.certificate.update({
       where: { id },
       data: { isRevoked: true, expiryDate: new Date() },
       include: {
@@ -199,12 +334,25 @@ export class CertificatesService {
             id: true,
             regNumber: true,
             schoolId: true,
+            className: true,
             user: { select: { firstName: true, lastName: true } },
             school: { select: { id: true, name: true } },
           },
         },
       },
     });
+
+    await this.audit.log({
+      schoolId: updated.student.schoolId,
+      actor: { userId: actor.userId, role: actor.role },
+      action: AcademicAuditAction.CERT_REVOKE,
+      className: updated.student.className,
+      studentId: updated.studentId,
+      summary: `Revoked certificate ${updated.serialNumber} for ${updated.student.user.firstName} ${updated.student.user.lastName}`,
+      metadata: { serialNumber: updated.serialNumber, track: updated.track },
+    });
+
+    return updated;
   }
 
   async verify(serialNumber: string) {
@@ -220,242 +368,123 @@ export class CertificatesService {
         serialNumber: cert.serialNumber,
         studentName: `${cert.student.user.firstName} ${cert.student.user.lastName}`,
         school: cert.student.school.name,
-        track: cert.track.replace('TRACK_', 'Track '),
+        track: certificateArtForTrack(cert.track).trackLabel,
         averageScore: cert.averageScore,
         issueDate: cert.issueDate,
-        /** Public URL of the generated PDF (e.g. Cloudinary); null if upload failed or not yet generated */
+        template: certificateArtForTrack(cert.track).template,
         pdfUrl: cert.pdfUrl || null,
       },
     };
   }
 
-  private async generatePDF(data: {
-    studentName: string; regNumber: string; schoolName: string;
-    track: string; averageScore: number; serialNumber: string;
-    issueDate: Date; qrDataUrl: string;
-  }): Promise<Buffer> {
-    const grade = data.averageScore >= 90 ? 'Distinction' : data.averageScore >= 70 ? 'Merit' : 'Pass';
-    const gold = '#C9A227';
-    const goldSoft = '#E8D5A3';
-    const ink = '#030910';
-    const cream = '#F5F0E6';
-
-    const docDefinition: any = {
-      pageOrientation: 'landscape',
-      pageSize: 'A4',
-      pageMargins: [48, 44, 48, 44],
-      defaultStyle: { font: 'Helvetica' },
-      background: [
-        {
-          canvas: [
-            { type: 'rect', x: 0, y: 0, w: 841, h: 595, color: ink },
-            { type: 'rect', x: 0, y: 0, w: 841, h: 140, color: '#071525' },
-            { type: 'line', x1: 0, y1: 140, x2: 841, y2: 140, lineWidth: 1.5, lineColor: gold },
-            { type: 'line', x1: 0, y1: 143, x2: 841, y2: 143, lineWidth: 0.35, lineColor: 'rgba(201,162,39,0.35)' },
-            { type: 'rect', x: 28, y: 28, w: 785, h: 539, lineColor: 'rgba(201,162,39,0.5)', lineWidth: 1.2 },
-            { type: 'rect', x: 34, y: 34, w: 773, h: 527, lineColor: 'rgba(201,162,39,0.15)', lineWidth: 0.6 },
-            { type: 'line', x1: 120, y1: 520, x2: 721, y2: 520, lineWidth: 0.4, lineColor: 'rgba(201,162,39,0.2)' },
-          ],
+  async previewIssue(studentId: string, track: string) {
+    const student = await this.prisma.student.findUnique({
+      where: { id: studentId },
+      include: {
+        user: { select: { firstName: true, lastName: true } },
+        school: { select: { id: true, name: true } },
+        moduleProgress: {
+          where: { status: 'COMPLETED', module: { track: track as TrackLevel, moduleType: ModuleType.STANDARD } },
         },
-      ],
-      content: [
-        {
-          text: 'OFFICIAL CREDENTIAL',
-          style: 'eyebrow',
-          margin: [0, 8, 0, 6],
-        },
-        {
-          text: 'ADHARAEDU',
-          style: 'brand',
-          margin: [0, 0, 0, 2],
-        },
-        {
-          text: 'Learn Smart · Grow Together',
-          style: 'tagline',
-          margin: [0, 0, 0, 18],
-        },
-        {
-          canvas: [{ type: 'line', x1: 280, y1: 0, x2: 560, y2: 0, lineWidth: 0.75, lineColor: gold }],
-          margin: [0, 0, 0, 14],
-        },
-        {
-          text: 'Certificate of Completion',
-          style: 'title',
-          margin: [0, 0, 0, 22],
-        },
-        {
-          text: 'This is to certify that',
-          style: 'subtitle',
-          margin: [0, 0, 0, 10],
-        },
-        {
-          text: data.studentName,
-          style: 'studentName',
-          margin: [0, 0, 0, 6],
-        },
-        {
-          canvas: [{ type: 'line', x1: 200, y1: 0, x2: 640, y2: 0, lineWidth: 0.5, lineColor: 'rgba(201,162,39,0.45)' }],
-          margin: [0, 4, 0, 8],
-        },
-        {
-          text: `Reg. ${data.regNumber}`,
-          style: 'regNo',
-          margin: [0, 0, 0, 18],
-        },
-        {
-          text: 'has successfully completed the',
-          style: 'body',
-          margin: [0, 0, 0, 6],
-        },
-        {
-          text: data.track,
-          style: 'track',
-          margin: [0, 0, 0, 6],
-        },
-        {
-          text: `programme at ${data.schoolName}`,
-          style: 'body',
-          margin: [0, 0, 0, 20],
-        },
-        {
-          table: {
-            widths: ['*'],
-            body: [
-              [
-                {
-                  fillColor: '#0c1829',
-                  stack: [
-                    {
-                      text: `${data.averageScore}%`,
-                      fontSize: 22,
-                      bold: true,
-                      color: goldSoft,
-                      alignment: 'center',
-                      margin: [0, 12, 0, 2],
-                    },
-                    {
-                      text: `Average score  ·  ${grade}`,
-                      fontSize: 10,
-                      color: 'rgba(245,240,230,0.65)',
-                      alignment: 'center',
-                      margin: [0, 0, 0, 12],
-                    },
-                  ],
-                },
-              ],
-            ],
-          },
-          layout: 'noBorders',
-          margin: [120, 0, 120, 22],
-        },
-        {
-          columns: [
-            {
-              width: 100,
-              stack: [
-                { text: 'VERIFY', fontSize: 7, color: 'rgba(245,240,230,0.35)', letterSpacing: 1.2, margin: [0, 0, 0, 4] },
-                { image: data.qrDataUrl, width: 82, height: 82 },
-              ],
-            },
-            {
-              width: '*',
-              stack: [
-                {
-                  canvas: [{ type: 'line', x1: 0, y1: 0, x2: 220, y2: 0, lineWidth: 0.8, lineColor: gold }],
-                  margin: [0, 52, 0, 6],
-                },
-                { text: 'Ali Samuel Chidera', style: 'signName' },
-                { text: 'Founder & Chief Learning Officer', style: 'signTitle' },
-                { text: 'AdharaEdu', style: 'signOrg' },
-              ],
-              margin: [28, 0, 0, 0],
-            },
-            {
-              width: 200,
-              stack: [
-                {
-                  text: data.issueDate.toLocaleDateString('en-NG', { year: 'numeric', month: 'long', day: 'numeric' }),
-                  style: 'metadata',
-                  alignment: 'right',
-                },
-                { text: data.serialNumber, style: 'serial', alignment: 'right', margin: [0, 6, 0, 0] },
-                {
-                  text: 'Scan QR to verify authenticity',
-                  fontSize: 7,
-                  color: 'rgba(245,240,230,0.35)',
-                  alignment: 'right',
-                  margin: [0, 10, 0, 0],
-                },
-              ],
-            },
-          ],
-          columnGap: 12,
-        },
-      ],
-      styles: {
-        eyebrow: {
-          fontSize: 8,
-          letterSpacing: 3.2,
-          color: 'rgba(232,213,163,0.55)',
-          alignment: 'center',
-          bold: true,
-        },
-        brand: {
-          fontSize: 32,
-          bold: true,
-          color: gold,
-          alignment: 'center',
-        },
-        tagline: {
-          fontSize: 9,
-          color: 'rgba(245,240,230,0.45)',
-          alignment: 'center',
-          italics: true,
-        },
-        title: {
-          fontSize: 22,
-          bold: true,
-          color: cream,
-          alignment: 'center',
-        },
-        subtitle: {
-          fontSize: 11,
-          color: 'rgba(245,240,230,0.55)',
-          alignment: 'center',
-        },
-        studentName: {
-          fontSize: 28,
-          bold: true,
-          color: '#FFFFFF',
-          alignment: 'center',
-        },
-        regNo: {
-          fontSize: 10,
-          color: 'rgba(245,240,230,0.45)',
-          alignment: 'center',
-        },
-        body: {
-          fontSize: 12,
-          color: 'rgba(245,240,230,0.72)',
-          alignment: 'center',
-        },
-        track: {
-          fontSize: 17,
-          bold: true,
-          color: goldSoft,
-          alignment: 'center',
-        },
-        signName: { fontSize: 11, bold: true, color: cream, margin: [0, 0, 0, 2] },
-        signTitle: { fontSize: 8, color: 'rgba(245,240,230,0.45)' },
-        signOrg: { fontSize: 8, color: 'rgba(201,162,39,0.75)', margin: [0, 4, 0, 0] },
-        metadata: { fontSize: 8, color: 'rgba(245,240,230,0.4)' },
-        serial: { fontSize: 9, color: goldSoft, font: 'Courier', bold: true },
       },
-    };
+    });
+    if (!student) throw new NotFoundException('Student not found');
 
-    return new Promise<Buffer>((resolve, reject) => {
-      const doc = (pdfMake as any).createPdf(docDefinition);
-      doc.getBuffer((buf: Buffer) => resolve(buf), reject);
+    const eligibility = await this.checkEligibility(studentId);
+    const art = certificateArtForTrack(track);
+    const scores = student.moduleProgress.map((p) => p.score || 0);
+    const avg = scores.length
+      ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+      : 0;
+    const completionMod = await this.trackCompletionExamModule(track as TrackLevel);
+    const completionExamScore = completionMod
+      ? await this.bestTrackCompletionExamScore(studentId, completionMod.id)
+      : null;
+    const frontendUrl = this.config.get('FRONTEND_URL', 'http://localhost:3000');
+    const sampleSerial = `ADH-CERT-${new Date().getFullYear()}-PREVIEW`;
+    const issueDate = new Date();
+    const isEligible = eligibility.tracks?.includes(track) ?? false;
+
+    return {
+      studentId,
+      studentName: `${student.user.firstName} ${student.user.lastName}`,
+      regNumber: student.regNumber,
+      schoolId: student.school.id,
+      schoolName: student.school.name,
+      track,
+      trackLabel: art.trackLabel,
+      template: art.template,
+      accent: art.accent,
+      navy: art.navy,
+      gold: art.gold,
+      averageScore: avg,
+      grade: certificateGrade(avg),
+      issueDate: issueDate.toISOString(),
+      issueDateLabel: formatCertDate(issueDate),
+      serialNumber: sampleSerial,
+      verifyUrl: `${frontendUrl}/verify-certificate/${sampleSerial}`,
+      completionExamTitle: completionMod?.title ?? null,
+      completionExamScore,
+      completionExamPassMark: CertificatesService.COMPLETION_EXAM_PASS,
+      eligible: isEligible,
+      eligibilityReason: isEligible ? null : (eligibility.blockers?.[track] ?? 'Certificate requirements not met'),
+    };
+  }
+
+  async listEligible(opts?: { schoolId?: string; className?: string; track?: string }) {
+    const where: { schoolId?: string; className?: string; track?: TrackLevel } = {};
+    if (opts?.schoolId) where.schoolId = opts.schoolId;
+    if (opts?.className?.trim()) where.className = opts.className.trim();
+    const tr = opts?.track?.trim().toUpperCase();
+    if (tr && Object.values(TrackLevel).includes(tr as TrackLevel)) {
+      where.track = tr as TrackLevel;
+    }
+
+    const students = await this.prisma.student.findMany({
+      where,
+      select: {
+        id: true,
+        regNumber: true,
+        track: true,
+        className: true,
+        schoolId: true,
+        user: { select: { firstName: true, lastName: true } },
+        school: { select: { id: true, name: true } },
+        certificates: { where: { isRevoked: false }, select: { track: true } },
+      },
+      orderBy: [{ school: { name: 'asc' } }, { className: 'asc' }],
+    });
+
+    const rows: any[] = [];
+    for (const s of students) {
+      const elig = await this.checkEligibility(s.id);
+      const issuedTracks = new Set(s.certificates.map((c) => c.track));
+      for (const t of elig.tracks || []) {
+        if (where.track && t !== where.track) continue;
+        if (issuedTracks.has(t as TrackLevel)) continue;
+        const preview = await this.previewIssue(s.id, t);
+        rows.push({
+          studentId: s.id,
+          studentName: preview.studentName,
+          regNumber: s.regNumber,
+          className: s.className,
+          schoolId: s.schoolId,
+          schoolName: s.school.name,
+          track: t,
+          trackLabel: preview.trackLabel,
+          template: preview.template,
+          averageScore: preview.averageScore,
+          grade: preview.grade,
+        });
+      }
+    }
+    return rows;
+  }
+
+  listTrackDesigns() {
+    return (['TRACK_1', 'TRACK_2', 'TRACK_3'] as const).map((track) => {
+      const art = certificateArtForTrack(track);
+      return { track, ...art };
     });
   }
 }

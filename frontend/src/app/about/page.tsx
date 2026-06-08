@@ -6,9 +6,23 @@ import { MarketingNav } from '@/components/MarketingNav'
 
 const TEAM = [
   {
-    name: 'Founder Name',
+    name: 'Ali Samuel Chidera',
     role: 'CEO & Co-Founder',
-    bio: "Write a short bio here. Talk about their background, what drove them to start AdharaEdu, and what they're most excited about.",
+    bio: 'Founder and CEO of AdharaEdu Tech Solutions Limited. A former technology educator building hands-on, employable tech pathways for Nigerian secondary school students.',
+    details: {
+      title: 'Ali Samuel Chidera – CEO & Co-Founder',
+      lead: 'Students working in a computer lab – an environment Ali Chidera is determined to improve.',
+      paragraphs: [
+        'Ali Samuel Chidera is the visionary Founder and CEO of AdharaEdu Tech Solutions Limited. A former technology educator, Ali spent years teaching web development and digital skills to Nigerian secondary school students.',
+        'He founded AdharaEdu after witnessing the digital divide firsthand – for example, many students still rely on costly cybercafés just to practice exam software. Today his mission is to bridge that gap in education by bringing practical, affordable tech education into every school.',
+        'Ali’s passion is equipping public schools with functional computer labs and creating clear tech-education pathways for youth (especially girls and rural students). He focuses on recruiting and training qualified tutors and deploying hands-on curriculum, so that every student gains practical, employable skills in coding, design and digital literacy.',
+      ],
+      bullets: [
+        { label: 'Background', text: 'Technology educator with deep experience in secondary school e-learning.' },
+        { label: 'Motivation', text: 'Closing Nigeria’s digital skills gap by bringing affordable tech education into every school.' },
+        { label: 'Impact focus', text: 'Building computer labs, training teachers, and empowering youth with practical digital skills.' },
+      ],
+    },
     socials: [
       { href: '#', label: 'LinkedIn', text: 'in' },
       { href: '#', label: 'Twitter', text: '𝕏' },
@@ -16,9 +30,23 @@ const TEAM = [
     ],
   },
   {
-    name: 'Founder Name',
+    name: 'Okechukwu Emmanuel Ukwueji',
     role: 'CTO & Co-Founder',
-    bio: "Write a short bio here. Talk about their background, what drove them to start AdharaEdu, and what they're most excited about.",
+    bio: 'Leads platform engineering and system architecture — building reliable school dashboards, lesson tools, and assessments that work even on slow internet.',
+    details: {
+      title: 'Okechukwu Emmanuel Ukwueji – CTO & Co-Founder',
+      lead: 'A software engineer coding – representing the technology platform that powers AdharaEdu.',
+      paragraphs: [
+        'Okechukwu Emmanuel Ukwueji is the Chief Technology Officer and Co-Founder of AdharaEdu. With expertise in software development and system architecture, he leads the design and deployment of AdharaEdu’s learning platform and digital curriculum.',
+        'He joined the team after seeing a glaring disconnect: Nigerian schools often teach outdated computer theory, yet very few practical tech tools are available to students. He is passionate about creating simple, reliable, and scalable educational technology.',
+        'He is most excited about iterating the platform’s features (like real-time lesson reports and gamified exercises) so that educators can effortlessly deliver quality digital education to every student.',
+      ],
+      bullets: [
+        { label: 'Role', text: 'Leads all technical development — from curriculum software to student dashboards.' },
+        { label: 'Approach', text: 'Builds robust solutions that remain usable on slow internet and limited devices.' },
+        { label: 'Vision', text: 'Automate attendance, progress tracking, and assessments so schools focus on teaching, not tech headaches.' },
+      ],
+    },
     socials: [
       { href: '#', label: 'LinkedIn', text: 'in' },
       { href: '#', label: 'Twitter', text: '𝕏' },
@@ -26,9 +54,23 @@ const TEAM = [
     ],
   },
   {
-    name: 'Founder Name',
+    name: '[Name]',
     role: 'COO & Co-Founder',
-    bio: "Write a short bio here. Talk about their background, what drove them to start AdharaEdu, and what they're most excited about.",
+    bio: 'Leads operations, partnerships, and programme delivery — scaling AdharaEdu into new schools and ensuring inclusive access for girls and underserved communities.',
+    details: {
+      title: '[Name] – COO & Co-Founder',
+      lead: 'Female students collaborating on laptops – a reminder of the opportunities AdharaEdu is creating for girls in tech.',
+      paragraphs: [
+        '[Name] is the Chief Operating Officer and Co-Founder of AdharaEdu. With a strong background in operations, partnership-building and education management, she drives the organization’s expansion into new regions and schools.',
+        'She was inspired to co-found AdharaEdu by a deep concern for students in underserved communities, especially girls. She works on forging partnerships with public schools and community groups to bring tech training directly to these students.',
+        'She is most excited about scaling AdharaEdu’s reach across Nigeria: by strengthening school relationships and tailoring programs for different regions, she ensures no child is left behind in the digital economy.',
+      ],
+      bullets: [
+        { label: 'Expertise', text: 'Operations and education program management with an emphasis on inclusion.' },
+        { label: 'Focus', text: 'Serving girls and rural students through dedicated programs and partnerships.' },
+        { label: 'Ambition', text: 'Build a nationwide network of tech-enabled schools and expand partnerships across regions.' },
+      ],
+    },
     socials: [
       { href: '#', label: 'LinkedIn', text: 'in' },
       { href: '#', label: 'Twitter', text: '𝕏' },
@@ -125,6 +167,7 @@ function StatCell({
 
 export default function AboutPage() {
   const rootRef = useRef<HTMLDivElement>(null)
+  const [openMemberIdx, setOpenMemberIdx] = useState<number | null>(null)
 
   useEffect(() => {
     const root = rootRef.current
@@ -140,6 +183,25 @@ export default function AboutPage() {
     root.querySelectorAll('.reveal, .value-item, .team-card').forEach((el) => observer.observe(el))
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMemberIdx(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  useEffect(() => {
+    if (openMemberIdx == null) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [openMemberIdx])
+
+  const openMember = openMemberIdx != null ? TEAM[openMemberIdx] : null
 
   return (
     <div ref={rootRef} className="about-page marketing-subpage">
@@ -169,16 +231,22 @@ export default function AboutPage() {
         <div className="about-hero-visual">
           <div className="hero-img-stack">
             <div className="hero-img-main">
-              <div className="img-placeholder">
-                <span>🏫</span>
-                <p>// school-photo.jpg</p>
-              </div>
+              <img
+                src="/about/hero-main.png"
+                alt="Student using a laptop in a library study environment"
+                width={900}
+                height={600}
+                decoding="async"
+              />
             </div>
             <div className="hero-img-accent">
-              <div className="img-placeholder">
-                <span>📸</span>
-                <p>// founders.jpg</p>
-              </div>
+              <img
+                src="/about/hero-accent.png"
+                alt="Modern computer lab with rows of workstations"
+                width={600}
+                height={400}
+                decoding="async"
+              />
             </div>
             <div className="floating-badge-about">
               <div className="badge-num">50+</div>
@@ -236,9 +304,8 @@ export default function AboutPage() {
           {TEAM.map((m, idx) => (
             <div key={`${m.role}-${idx}`} className="team-card">
               <div className="team-photo">
-                <div className="team-photo-placeholder">
+                <div className="team-photo-placeholder" aria-hidden>
                   <div className="avatar-ring">👤</div>
-                  <p>// photo</p>
                 </div>
                 <div className="team-photo-overlay" />
               </div>
@@ -246,18 +313,99 @@ export default function AboutPage() {
                 <h3>{m.name}</h3>
                 <div className="team-role">{m.role}</div>
                 <p className="team-bio">{m.bio}</p>
-                <div className="team-socials">
-                  {m.socials.map((s) => (
-                    <a key={s.label} className="social-dot" href={s.href} title={s.label}>
-                      {s.text}
-                    </a>
-                  ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpenMemberIdx(idx)}>
+                    Read more →
+                  </button>
+                  <div className="team-socials" style={{ marginTop: 0 }}>
+                    {m.socials.map((s) => (
+                      <a key={s.label} className="social-dot" href={s.href} title={s.label}>
+                        {s.text}
+                      </a>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      {/* Read more modal — styles: .about-team-modal* in globals.css (tablet/mobile safe areas, dvh) */}
+      {openMember && (
+        <div
+          className="about-team-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${openMember.name} details`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setOpenMemberIdx(null)
+          }}
+        >
+          <div
+            className="card about-team-modal__panel"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm about-team-modal__close"
+              onClick={() => setOpenMemberIdx(null)}
+              aria-label="Close"
+            >
+              Close ✕
+            </button>
+
+            <div className="about-team-modal__head">
+              <div className="about-team-modal__avatar" aria-hidden>
+                👤
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div className="section-eyebrow" style={{ marginBottom: 8 }}>
+                  // founder
+                </div>
+                <div className="font-display fw-800 text-white about-team-modal__title">
+                  {(openMember as any).details?.title || `${openMember.name} — ${openMember.role}`}
+                </div>
+                {(openMember as any).details?.lead && (
+                  <div className="text-muted text-sm" style={{ marginTop: 10 }}>
+                    {(openMember as any).details.lead}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="about-team-modal__body" style={{ marginTop: 18 }}>
+              {Array.isArray((openMember as any).details?.paragraphs) && (openMember as any).details.paragraphs.length ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {(openMember as any).details.paragraphs.map((p: string, i: number) => (
+                    <p key={i} style={{ color: 'var(--muted)', lineHeight: 1.75 }}>
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ color: 'var(--muted)', lineHeight: 1.75 }}>{openMember.bio}</p>
+              )}
+
+              {Array.isArray((openMember as any).details?.bullets) && (openMember as any).details.bullets.length ? (
+                <div className="about-team-modal__bullets" style={{ marginTop: 16, display: 'grid', gap: 10 }}>
+                  {(openMember as any).details.bullets.map((b: any, i: number) => (
+                    <div
+                      key={i}
+                      style={{ background: 'var(--muted3)', border: '1px solid var(--border2)', borderRadius: 14, padding: 12 }}
+                    >
+                      <div className="about-team-modal__bullet-label">{b.label}</div>
+                      <div className="about-team-modal__bullet-text" style={{ marginTop: 6, lineHeight: 1.6 }}>
+                        {b.text}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="about-cta-banner">
         <div className="section-eyebrow" style={{ justifyContent: 'center', display: 'flex' }}>

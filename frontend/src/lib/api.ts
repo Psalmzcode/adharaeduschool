@@ -28,6 +28,27 @@ async function req(method: string, path: string, body?: any): Promise<any> {
   return res.json().catch(() => ({}))
 }
 
+/** Authenticated file download (CSV, PDF, etc.). */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`${BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: 'Download failed' }))
+    throw new Error(err.message || `Download failed (${res.status})`)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 // Upload — multipart/form-data
 async function upload(path: string, file: File, extra?: Record<string, string>): Promise<any> {
   const token = getToken()
@@ -84,6 +105,9 @@ export const schoolsApi = {
   /** Post-approval onboarding — sets profileCompletedAt */
   completeProfile: (data: Record<string, unknown>) =>
     req('POST', '/schools/my-school/complete-profile', data),
+  /** Onboarding draft — saves fields without marking profileCompletedAt */
+  saveProfileDraft: (data: Record<string, unknown>) =>
+    req('PATCH', '/schools/my-school/profile-draft', data),
   updateStatus: (id: string, status: string, notes?: string) =>
     req('PATCH', `/schools/${id}/status`, { status, notes }),
   /** Super Admin — after correcting admin email, resend “pending approval” (school must still be PENDING). */
@@ -159,14 +183,74 @@ export const tutorsApi = {
 
 // ─── CLASS PERFORMANCE (Phase D roll-up) ────────────────────
 export const classPerformanceApi = {
-  rollup: (params: { schoolId: string; className: string; days?: number; track?: string }) => {
+  rollup: (params: { schoolId: string; className: string; days?: number; track?: string; termLabel?: string }) => {
     const p = new URLSearchParams()
     p.set('schoolId', params.schoolId)
     p.set('className', params.className)
     if (params.days != null) p.set('days', String(params.days))
     if (params.track) p.set('track', params.track)
+    if (params.termLabel) p.set('termLabel', params.termLabel)
     return req('GET', `/class-performance?${p}`)
   },
+  downloadCsv: (params: { schoolId: string; className: string; days?: number; track?: string; termLabel?: string }) => {
+    const p = new URLSearchParams()
+    p.set('schoolId', params.schoolId)
+    p.set('className', params.className)
+    if (params.days != null) p.set('days', String(params.days))
+    if (params.track) p.set('track', params.track)
+    if (params.termLabel) p.set('termLabel', params.termLabel)
+    const safe = params.className.replace(/[^\w-]+/g, '_')
+    return downloadFile(`/class-performance/export/csv?${p}`, `class-performance-${safe}.csv`)
+  },
+  downloadPdf: (params: { schoolId: string; className: string; days?: number; track?: string; termLabel?: string }) => {
+    const p = new URLSearchParams()
+    p.set('schoolId', params.schoolId)
+    p.set('className', params.className)
+    if (params.days != null) p.set('days', String(params.days))
+    if (params.track) p.set('track', params.track)
+    if (params.termLabel) p.set('termLabel', params.termLabel)
+    const safe = params.className.replace(/[^\w-]+/g, '_')
+    return downloadFile(`/class-performance/export/pdf?${p}`, `term-report-${safe}.pdf`)
+  },
+}
+
+// ─── ACADEMIC AUDIT (Phase C) ───────────────────────────────
+export const academicAuditApi = {
+  list: (params?: { schoolId?: string; className?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (params?.schoolId) p.set('schoolId', params.schoolId)
+    if (params?.className) p.set('className', params.className)
+    if (params?.limit != null) p.set('limit', String(params.limit))
+    const q = p.toString()
+    return req('GET', `/academic-audit${q ? `?${q}` : ''}`)
+  },
+}
+
+// ─── TUTOR ATTENDANCE (Phase C) ─────────────────────────────
+export const tutorAttendanceApi = {
+  checkIn: (schoolId: string, notes?: string) => req('POST', '/tutor-attendance/check-in', { schoolId, notes }),
+  mine: () => req('GET', '/tutor-attendance/mine'),
+  bySchool: (schoolId: string, opts?: { from?: string; to?: string }) => {
+    const p = new URLSearchParams()
+    if (opts?.from) p.set('from', opts.from)
+    if (opts?.to) p.set('to', opts.to)
+    const q = p.toString()
+    return req('GET', `/tutor-attendance/school/${schoolId}${q ? `?${q}` : ''}`)
+  },
+  mark: (data: { tutorId: string; schoolId: string; date: string; status: string; notes?: string }) =>
+    req('POST', '/tutor-attendance/mark', data),
+}
+
+// ─── SCHOOL TERMS (Phase B) ───────────────────────────────────
+export const schoolTermsApi = {
+  list: (schoolId: string) => req('GET', `/school-terms/school/${schoolId}`),
+  start: (schoolId: string, data: {
+    academicYearLabel: string
+    termOrdinal: number
+    cloneTutorAssignments?: boolean
+    updateStudentTermLabels?: boolean
+  }) => req('POST', `/school-terms/school/${schoolId}/start`, data),
+  end: (schoolId: string) => req('POST', `/school-terms/school/${schoolId}/end`, {}),
 }
 
 // ─── MODULES / CURRICULUM ───────────────────────────────────
@@ -203,6 +287,18 @@ export const modulesApi = {
     req('PATCH', '/modules/class-progress/scores', data),
   advanceClass: (data: { schoolId: string; className: string; moduleId: string; passMark?: number }) =>
     req('PATCH', '/modules/class-progress/advance', data),
+  suggestedScores: (schoolId: string, className: string, moduleId: string, passMark?: number) => {
+    const p = new URLSearchParams({ schoolId, className, moduleId })
+    if (passMark != null) p.set('passMark', String(passMark))
+    return req('GET', `/modules/class-progress/suggested-scores?${p.toString()}`)
+  },
+  retakeStatus: (studentId: string, moduleId: string, passMark?: number) => {
+    const p = new URLSearchParams({ studentId, moduleId })
+    if (passMark != null) p.set('passMark', String(passMark))
+    return req('GET', `/modules/retake-status?${p.toString()}`)
+  },
+  applyRetake: (studentId: string, moduleId: string, passMark?: number) =>
+    req('PATCH', `/modules/retake/${studentId}/${moduleId}`, passMark != null ? { passMark } : {}),
 }
 
 // ─── CURRICULUM (canonical lessons + class next-lesson pointer) ─
@@ -217,6 +313,10 @@ export const curriculumApi = {
     if (track3Stack) p.set('track3Stack', track3Stack)
     return req('GET', `/curriculum/class-state?${p}`)
   },
+  /** Student: files for class current lesson, else module fallback (see backend rules). */
+  myLearningMaterials: () => req('GET', '/curriculum/my-learning-materials'),
+  /** Student: full lesson journey — active module, lessons, completion, tutor handouts. */
+  myLessonJourney: () => req('GET', '/curriculum/my-lesson-journey'),
   createLesson: (data: {
     moduleId: string
     title: string
@@ -368,6 +468,18 @@ export const lessonsApi = {
   mine: () => req('GET', '/lessons'),
   bySchool: (schoolId: string) => req('GET', `/lessons/school?schoolId=${schoolId}`),
   forStudentClass: () => req('GET', '/lessons/my-class'),
+  /** Gemini draft of lesson steps; tutor should review before saving. */
+  generateSteps: (data: { moduleId: string; curriculumLessonId?: string | null; durationMins?: number }) =>
+    req('POST', '/lessons/generate-steps', data),
+  /** Gemini draft slide-style material + markdown for export (tutor reviews before sharing). */
+  generateLearningMaterial: (data: {
+    moduleId: string
+    curriculumLessonId?: string | null
+    /** full = multi-pass detailed handout (default); quick = faster single JSON draft */
+    depth?: 'full' | 'quick'
+  }) => req('POST', '/lessons/generate-learning-material', data),
+  publishMaterial: (id: string, data?: { studentHandoutMarkdown?: string }) =>
+    req('POST', `/lessons/${encodeURIComponent(id)}/publish-material`, data || {}),
   create: (data: any) => req('POST', '/lessons', data),
   update: (id: string, data: any) => req('PATCH', `/lessons/${id}`, data),
   delete: (id: string) => {
@@ -388,6 +500,12 @@ export const uploadsApi = {
     upload(`/uploads?entityType=report&entityId=${entityId}`, file),
   lessonPlan: (file: File, entityId: string) =>
     upload(`/uploads?entityType=lesson-plan&entityId=${entityId}`, file),
+  /** Super Admin / Curriculum Lead — canonical lesson file (slides, PDF, etc.). */
+  curriculumLesson: (file: File, lessonId: string) =>
+    upload(`/uploads?entityType=curriculum-lesson&entityId=${encodeURIComponent(lessonId)}`, file),
+  /** Super Admin / Curriculum Lead — whole-module materials when no per-lesson files or as fallback. */
+  moduleMaterial: (file: File, moduleId: string) =>
+    upload(`/uploads?entityType=module-material&entityId=${encodeURIComponent(moduleId)}`, file),
   practical: (file: File, entityId: string) =>
     upload(`/uploads?entityType=practical&entityId=${entityId}`, file),
   /** Tutor KYC — entityType e.g. tutor-kyc-passport, tutor-kyc-id, tutor-kyc-signature */
@@ -465,8 +583,8 @@ export const assignmentsApi = {
   submit: (assignmentId: string, data: { fileUrl?: string; textBody?: string }) =>
     req('POST', `/assignments/${assignmentId}/submit`, data),
   submissions: (assignmentId: string) => req('GET', `/assignments/${assignmentId}/submissions`),
-  grade: (submissionId: string, grade: number, feedback: string) =>
-    req('PATCH', `/assignments/submissions/${submissionId}/grade`, { grade, feedback }),
+  grade: (submissionId: string, score: number, feedback: string) =>
+    req('PATCH', `/assignments/submissions/${submissionId}/grade`, { score, feedback }),
   update: (id: string, data: any) => req('PATCH', `/assignments/${id}`, data),
   delete: (id: string) => {
     const token = getToken()
@@ -485,6 +603,10 @@ export const practicalsApi = {
   submissions: (taskId: string) => req('GET', `/practicals/tasks/${taskId}/submissions`),
   grade: (submissionId: string, data: { totalScore: number; feedback?: string; scoreBreakdown?: any }) =>
     req('PATCH', `/practicals/submissions/${submissionId}/grade`, data),
+  aiGrade: (submissionId: string) => req('POST', `/practicals/submissions/${submissionId}/ai-grade`),
+  approveAiGrade: (submissionId: string, data?: { totalScore?: number; feedback?: string }) =>
+    req('PATCH', `/practicals/submissions/${submissionId}/approve-ai-grade`, data || {}),
+  aiReviewQueue: () => req('GET', '/practicals/ai-review-queue'),
   bulkGrade: (taskId: string, data: { submissionIds?: string[]; totalScore: number; feedback?: string; scoreBreakdown?: any }) =>
     req('PATCH', `/practicals/tasks/${taskId}/bulk-grade`, data),
 }
@@ -505,6 +627,17 @@ export const bulkUploadApi = {
 export const certificatesApi = {
   mine: () => req('GET', '/certificates/my-certificates'),
   all: () => req('GET', '/certificates'),
+  designs: () => req('GET', '/certificates/designs'),
+  eligible: (params?: { schoolId?: string; className?: string; track?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.schoolId) q.set('schoolId', params.schoolId)
+    if (params?.className) q.set('className', params.className)
+    if (params?.track) q.set('track', params.track)
+    const qs = q.toString()
+    return req('GET', `/certificates/eligible${qs ? `?${qs}` : ''}`)
+  },
+  preview: (studentId: string, track: string) =>
+    req('GET', `/certificates/preview/${studentId}/${track}`),
   bySchool: async (schoolId: string) => {
     const students = await req('GET', `/students?schoolId=${schoolId}`)
     const list = Array.isArray(students) ? students : []
@@ -515,6 +648,8 @@ export const certificatesApi = {
   },
   check: (studentId: string) => req('GET', `/certificates/check-eligibility/${studentId}`),
   issue: (studentId: string, track: string) => req('POST', `/certificates/issue/${studentId}/${track}`),
+  bulkIssue: (data: { schoolId: string; className?: string; track?: string }) =>
+    req('POST', '/certificates/bulk-issue', data),
   verify: (serial: string) => req('GET', `/certificates/verify/${serial}`),
   byStudent: (studentId: string) => req('GET', `/certificates/student/${studentId}`),
   revoke: (id: string) => req('PATCH', `/certificates/${id}/revoke`),

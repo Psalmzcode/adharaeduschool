@@ -38,11 +38,39 @@ export class LessonsController {
     return this.lessonsService.create(req.user.sub, body);
   }
 
+  @Post('generate-steps')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  generateSteps(@Request() req, @Body() body: any) {
+    return this.lessonsService.generateStepDraft(req.user.sub, body);
+  }
+
+  /** Tutor-facing Gemini draft: slide-style content + markdown for export (review before sharing). */
+  @Post('generate-learning-material')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  generateLearningMaterial(@Request() req, @Body() body: any) {
+    return this.lessonsService.generateLearningMaterialDraft(req.user.sub, {
+      moduleId: body?.moduleId,
+      curriculumLessonId: body?.curriculumLessonId,
+      depth: body?.depth === 'quick' ? 'quick' : 'full',
+    });
+  }
+
   @Patch(':id')
   @UseGuards(RolesGuard)
   @Roles('TUTOR')
   update(@Param('id') id: string, @Request() req, @Body() body: any) {
     return this.lessonsService.update(id, req.user.sub, body);
+  }
+
+  @Post(':id/publish-material')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  publishMaterial(@Param('id') id: string, @Request() req, @Body() body: any) {
+    return this.lessonsService.publishMaterial(id, req.user.sub, {
+      studentHandoutMarkdown: body?.studentHandoutMarkdown,
+    });
   }
 
   @Delete(':id')

@@ -1,10 +1,10 @@
 'use client'
-import { useState, useEffect, useRef, Suspense, type ReactNode } from 'react'
+import { useState, useEffect, useRef, useCallback, Suspense, type ReactNode } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
 import { ClassPerformancePanel } from '@/components/ClassPerformancePanel'
-import { schoolsApi, tutorsApi, paymentsApi, reportsApi, cbtApi, payrollApi, tracksApi, practicalsApi, modulesApi, schoolClassesApi, curriculumApi, usersApi } from '@/lib/api'
+import { authApi, schoolsApi, tutorsApi, paymentsApi, reportsApi, cbtApi, payrollApi, tracksApi, practicalsApi, modulesApi, schoolClassesApi, curriculumApi, usersApi, uploadsApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { SACertificates } from './extras'
 
@@ -1721,7 +1721,7 @@ function SAPayroll() {
   )
 }
 
-function SATracks() {
+function SATracks({ readOnly = false }: { readOnly?: boolean }) {
   const { data: tracks, loading, setData } = useData(['sa', 'tracks'], () => tracksApi.all(), [])
   const arr = Array.isArray(tracks) ? tracks : []
   const [showAdd, setShowAdd] = useState(false)
@@ -1761,12 +1761,16 @@ function SATracks() {
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Program Tracks</h3>
-          <div className="text-muted text-sm">Create and manage tracks available to schools and tutors</div>
+          <div className="text-muted text-sm">
+            {readOnly ? 'Reference list of program tracks (managed by platform admin)' : 'Create and manage tracks available to schools and tutors'}
+          </div>
         </div>
-        <button onClick={() => setShowAdd((v) => !v)} className="btn btn-primary btn-sm">+ New Track</button>
+        {!readOnly && (
+          <button onClick={() => setShowAdd((v) => !v)} className="btn btn-primary btn-sm">+ New Track</button>
+        )}
       </div>
 
-      {showAdd && (
+      {!readOnly && showAdd && (
         <div className="card mb-20">
           <div className="font-display fw-600 text-white mb-16" style={{ fontSize: 16 }}>Create Track</div>
           <form onSubmit={createTrack} style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 2fr auto', gap: 12, alignItems: 'end' }}>
@@ -1790,7 +1794,7 @@ function SATracks() {
       {loading ? <p className="text-muted text-sm" style={{ padding: 20 }}>Loading tracks…</p> : (
         <div className="card">
           <table className="data-table">
-            <thead><tr><th>Code</th><th>Name</th><th>Description</th><th>Status</th><th>Action</th></tr></thead>
+            <thead><tr><th>Code</th><th>Name</th><th>Description</th><th>Status</th>{!readOnly && <th>Action</th>}</tr></thead>
             <tbody>
               {arr.map((t: any) => (
                 <tr key={t.id}>
@@ -1798,10 +1802,12 @@ function SATracks() {
                   <td style={{ fontWeight: 600, color: 'var(--white)' }}>{t.name}</td>
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{t.description || '—'}</td>
                   <td><span className={`badge badge-${t.isActive ? 'success' : 'warning'}`}>{t.isActive ? 'Active' : 'Archived'}</span></td>
-                  <td><button onClick={() => toggleActive(t)} className="btn btn-ghost btn-sm">{t.isActive ? 'Archive' : 'Activate'}</button></td>
+                  {!readOnly && (
+                    <td><button onClick={() => toggleActive(t)} className="btn btn-ghost btn-sm">{t.isActive ? 'Archive' : 'Activate'}</button></td>
+                  )}
                 </tr>
               ))}
-              {arr.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No tracks found</td></tr>}
+              {arr.length === 0 && <tr><td colSpan={readOnly ? 4 : 5} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No tracks found</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1810,10 +1816,15 @@ function SATracks() {
   )
 }
 
-function SAModules() {
+function SAModules({ contentOnly = false }: { contentOnly?: boolean }) {
   const { data: modules, loading, setData } = useData(['sa', 'modules'], () => modulesApi.all(), [])
   const { data: tracks } = useData(['sa', 'modules-tracks'], () => tracksApi.all(), [])
-  const { data: schools } = useData(['sa', 'modules-schools'], () => schoolsApi.all({ status: 'APPROVED' }), [])
+  const { data: schools } = useData(
+    ['sa', 'modules-schools'],
+    () => schoolsApi.all({ status: 'APPROVED' }),
+    [],
+    !contentOnly,
+  )
   const arr = Array.isArray(modules) ? modules : []
   const schoolArr = Array.isArray(schools) ? schools : []
   const trackArr = (Array.isArray(tracks) ? tracks : []).filter((t: any) => t.isActive !== false)
@@ -1843,8 +1854,26 @@ function SAModules() {
   const [lessonModuleId, setLessonModuleId] = useState('')
   const [curriculumLessons, setCurriculumLessons] = useState<any[]>([])
   const [loadingLessons, setLoadingLessons] = useState(false)
+  const [lessonMaterialsById, setLessonMaterialsById] = useState<Record<string, any[]>>({})
+  const [moduleMaterials, setModuleMaterials] = useState<any[]>([])
+  const [uploadingLessonId, setUploadingLessonId] = useState<string | null>(null)
+  const [uploadingModule, setUploadingModule] = useState(false)
   const [lessonSaving, setLessonSaving] = useState(false)
   const [lessonForm, setLessonForm] = useState({ title: '', position: '', isPublished: false })
+  const [editingLesson, setEditingLesson] = useState<any | null>(null)
+  const [lessonEditorForm, setLessonEditorForm] = useState({
+    title: '',
+    position: '',
+    objective: '',
+    estimatedDurationMins: '60',
+    takeHomeTask: '',
+    isPublished: false,
+    outlineText: '[]',
+    exercisesText: '[]',
+    quickCheckText: '[]',
+    resourcesText: '[]',
+  })
+  const [lessonEditorSaving, setLessonEditorSaving] = useState(false)
   const [form, setForm] = useState({
     track: trackChoices[0]?.code || 'TRACK_1',
     number: '1',
@@ -1922,6 +1951,66 @@ function SAModules() {
       .catch(() => setCurriculumLessons([]))
       .finally(() => setLoadingLessons(false))
   }, [lessonModuleId])
+
+  const refreshCurriculumMaterials = useCallback(async () => {
+    if (!lessonModuleId) {
+      setModuleMaterials([])
+      setLessonMaterialsById({})
+      return
+    }
+    try {
+      const modF = await uploadsApi.byEntity('module-material', lessonModuleId).catch(() => [])
+      setModuleMaterials(Array.isArray(modF) ? modF : [])
+    } catch {
+      setModuleMaterials([])
+    }
+    const next: Record<string, any[]> = {}
+    for (const L of curriculumLessons) {
+      if (!L?.id) continue
+      try {
+        const f = await uploadsApi.byEntity('curriculum-lesson', L.id).catch(() => [])
+        next[L.id] = Array.isArray(f) ? f : []
+      } catch {
+        next[L.id] = []
+      }
+    }
+    setLessonMaterialsById(next)
+  }, [lessonModuleId, curriculumLessons])
+
+  useEffect(() => {
+    if (!lessonModuleId || loadingLessons) return
+    void refreshCurriculumMaterials()
+  }, [lessonModuleId, loadingLessons, refreshCurriculumMaterials])
+
+  const uploadModuleMaterial = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !lessonModuleId) return
+    setUploadingModule(true)
+    try {
+      await uploadsApi.moduleMaterial(file, lessonModuleId)
+      notify.success('Module material uploaded')
+      await refreshCurriculumMaterials()
+    } catch (err: any) {
+      notify.error(err?.message || 'Upload failed')
+    }
+    setUploadingModule(false)
+  }
+
+  const uploadLessonMaterial = async (lessonId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploadingLessonId(lessonId)
+    try {
+      await uploadsApi.curriculumLesson(file, lessonId)
+      notify.success('Lesson material uploaded')
+      await refreshCurriculumMaterials()
+    } catch (err: any) {
+      notify.error(err?.message || 'Upload failed')
+    }
+    setUploadingLessonId(null)
+  }
 
   const filtered = arr
     .filter((m: any) => (filterTrack === 'ALL' ? true : String(m.track) === filterTrack))
@@ -2108,8 +2197,121 @@ function SAModules() {
     }
   }
 
+  const openLessonEditor = async (lessonId: string) => {
+    try {
+      const full = await curriculumApi.getLesson(lessonId)
+      setEditingLesson(full)
+      setLessonEditorForm({
+        title: String(full?.title || ''),
+        position: full?.position != null ? String(full.position) : '',
+        objective: String(full?.objective || ''),
+        estimatedDurationMins: full?.estimatedDurationMins != null ? String(full.estimatedDurationMins) : '60',
+        takeHomeTask: String(full?.takeHomeTask || ''),
+        isPublished: !!full?.isPublished,
+        outlineText: JSON.stringify(full?.outline ?? [], null, 2),
+        exercisesText: JSON.stringify(full?.exercises ?? [], null, 2),
+        quickCheckText: JSON.stringify(full?.quickCheckQuestions ?? [], null, 2),
+        resourcesText: JSON.stringify(full?.resources ?? [], null, 2),
+      })
+    } catch (err: any) {
+      notify.error(err?.message || 'Failed to load lesson')
+    }
+  }
+
+  const saveLessonEditor = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingLesson?.id) return
+    setLessonEditorSaving(true)
+    try {
+      const parseJson = (raw: string, label: string) => {
+        const t = raw.trim()
+        if (!t) return []
+        try {
+          return JSON.parse(t)
+        } catch {
+          throw new Error(`${label} must be valid JSON`)
+        }
+      }
+      await curriculumApi.updateLesson(editingLesson.id, {
+        title: lessonEditorForm.title.trim(),
+        position: lessonEditorForm.position ? Number(lessonEditorForm.position) : undefined,
+        objective: lessonEditorForm.objective.trim() || null,
+        estimatedDurationMins: Number(lessonEditorForm.estimatedDurationMins) || 60,
+        takeHomeTask: lessonEditorForm.takeHomeTask.trim() || null,
+        isPublished: lessonEditorForm.isPublished,
+        outline: parseJson(lessonEditorForm.outlineText, 'Outline'),
+        exercises: parseJson(lessonEditorForm.exercisesText, 'Exercises'),
+        quickCheckQuestions: parseJson(lessonEditorForm.quickCheckText, 'Quick checks'),
+        resources: parseJson(lessonEditorForm.resourcesText, 'Resources'),
+      })
+      const rows = await curriculumApi.lessonsByModule(lessonModuleId, true)
+      setCurriculumLessons(Array.isArray(rows) ? rows : [])
+      setEditingLesson(null)
+      notify.success('Lesson updated')
+    } catch (err: any) {
+      notify.error(err?.message || 'Failed to save lesson')
+    }
+    setLessonEditorSaving(false)
+  }
+
   return (
     <div>
+      <Modal
+        open={!!editingLesson}
+        onClose={() => setEditingLesson(null)}
+        title={editingLesson ? `Edit lesson · ${editingLesson.title}` : 'Edit lesson'}
+      >
+        <form onSubmit={saveLessonEditor} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 80px 100px', gap: 10 }}>
+            <div>
+              <label className="form-label">Title</label>
+              <input className="form-input" value={lessonEditorForm.title} onChange={(e) => setLessonEditorForm((f) => ({ ...f, title: e.target.value }))} required />
+            </div>
+            <div>
+              <label className="form-label">Pos</label>
+              <input className="form-input" type="number" min={1} value={lessonEditorForm.position} onChange={(e) => setLessonEditorForm((f) => ({ ...f, position: e.target.value }))} />
+            </div>
+            <div>
+              <label className="form-label">Mins</label>
+              <input className="form-input" type="number" min={1} value={lessonEditorForm.estimatedDurationMins} onChange={(e) => setLessonEditorForm((f) => ({ ...f, estimatedDurationMins: e.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <label className="form-label">Objective</label>
+            <textarea className="form-input" rows={2} value={lessonEditorForm.objective} onChange={(e) => setLessonEditorForm((f) => ({ ...f, objective: e.target.value }))} style={{ resize: 'vertical' }} />
+          </div>
+          <div>
+            <label className="form-label">Outline (JSON array)</label>
+            <textarea className="form-input" rows={4} value={lessonEditorForm.outlineText} onChange={(e) => setLessonEditorForm((f) => ({ ...f, outlineText: e.target.value }))} style={{ resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }} placeholder='[{"section":"Intro","points":["…"]}]' />
+          </div>
+          <div>
+            <label className="form-label">Exercises (JSON array)</label>
+            <textarea className="form-input" rows={4} value={lessonEditorForm.exercisesText} onChange={(e) => setLessonEditorForm((f) => ({ ...f, exercisesText: e.target.value }))} style={{ resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+          </div>
+          <div>
+            <label className="form-label">Quick check questions (JSON array)</label>
+            <textarea className="form-input" rows={3} value={lessonEditorForm.quickCheckText} onChange={(e) => setLessonEditorForm((f) => ({ ...f, quickCheckText: e.target.value }))} style={{ resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+          </div>
+          <div>
+            <label className="form-label">Take-home task</label>
+            <textarea className="form-input" rows={2} value={lessonEditorForm.takeHomeTask} onChange={(e) => setLessonEditorForm((f) => ({ ...f, takeHomeTask: e.target.value }))} style={{ resize: 'vertical' }} />
+          </div>
+          <div>
+            <label className="form-label">Resources (JSON array)</label>
+            <textarea className="form-input" rows={3} value={lessonEditorForm.resourcesText} onChange={(e) => setLessonEditorForm((f) => ({ ...f, resourcesText: e.target.value }))} style={{ resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }} placeholder='[{"label":"Slides","url":"…"}]' />
+          </div>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--muted)', fontSize: 13 }}>
+            <input type="checkbox" checked={lessonEditorForm.isPublished} onChange={(e) => setLessonEditorForm((f) => ({ ...f, isPublished: e.target.checked }))} />
+            Published (visible to tutors & students)
+          </label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingLesson(null)}>Cancel</button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={lessonEditorSaving}>
+              {lessonEditorSaving ? 'Saving…' : 'Save lesson'}
+            </button>
+          </div>
+        </form>
+      </Modal>
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Modules</h3>
@@ -2120,6 +2322,7 @@ function SAModules() {
         </button>
       </div>
 
+      {!contentOnly && (
       <div className="card mb-20">
         <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 16 }}>Class Module Advancement (Super Admin)</div>
         <div className="text-muted text-sm mb-14">Advance a class to the next module after score review.</div>
@@ -2165,6 +2368,7 @@ function SAModules() {
           )}
         </div>
       </div>
+      )}
 
       <div className="card mb-20">
         <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 16 }}>Curriculum lessons (canonical)</div>
@@ -2185,6 +2389,34 @@ function SAModules() {
             ))}
           </select>
         </div>
+        {lessonModuleId && (
+          <div className="mb-16" style={{ padding: '12px 14px', background: 'var(--muted3)', borderRadius: 10, border: '1px solid var(--border2)' }}>
+            <div className="font-display fw-600 text-white mb-6" style={{ fontSize: 13 }}>Module-wide files</div>
+            <div className="text-muted text-xs mb-10">
+              Fallback when a lesson has no files of its own, or before per-lesson uploads exist. Students see lesson files first, then these.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              {moduleMaterials.map((f: any) => (
+                <a key={f.id} href={f.url} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
+                  ⬇ {String(f.url || '').split('/').pop()?.slice(0, 48) || 'File'}
+                </a>
+              ))}
+              <label
+                className="btn btn-primary btn-sm"
+                style={{ cursor: uploadingModule ? 'wait' : 'pointer', opacity: uploadingModule ? 0.75 : 1 }}
+              >
+                {uploadingModule ? 'Uploading…' : '+ Upload module file'}
+                <input
+                  type="file"
+                  hidden
+                  disabled={uploadingModule || !lessonModuleId}
+                  onChange={uploadModuleMaterial}
+                  accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.zip"
+                />
+              </label>
+            </div>
+          </div>
+        )}
         <form onSubmit={addCurriculumLesson} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'end', marginBottom: 20 }}>
           <div style={{ flex: '1 1 200px' }}>
             <label className="form-label">New lesson title</label>
@@ -2228,6 +2460,7 @@ function SAModules() {
                   <th>#</th>
                   <th>Title</th>
                   <th>Published</th>
+                  <th>Materials</th>
                   <th />
                 </tr>
               </thead>
@@ -2245,7 +2478,29 @@ function SAModules() {
                         {L.isPublished ? 'Yes' : 'No'}
                       </button>
                     </td>
-                    <td>
+                    <td style={{ minWidth: 200 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                        {(lessonMaterialsById[L.id] || []).map((f: any) => (
+                          <a key={f.id} href={f.url} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: '4px 8px' }}>
+                            ⬇ {String(f.url || '').split('/').pop()?.slice(0, 36) || 'File'}
+                          </a>
+                        ))}
+                        <label className="btn btn-ghost btn-sm" style={{ fontSize: 11, cursor: uploadingLessonId === L.id ? 'wait' : 'pointer' }}>
+                          {uploadingLessonId === L.id ? '…' : '+ file'}
+                          <input
+                            type="file"
+                            hidden
+                            disabled={uploadingLessonId !== null}
+                            onChange={(e) => uploadLessonMaterial(L.id, e)}
+                            accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.zip"
+                          />
+                        </label>
+                      </div>
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => openLessonEditor(L.id)} style={{ marginRight: 6 }}>
+                        Edit
+                      </button>
                       <button type="button" className="btn btn-danger btn-sm" onClick={() => removeLesson(L.id)}>
                         Remove
                       </button>
@@ -2254,7 +2509,7 @@ function SAModules() {
                 ))}
                 {curriculumLessons.length === 0 && (
                   <tr>
-                    <td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)', padding: '20px 0' }}>
+                    <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: '20px 0' }}>
                       No lessons for this module yet.
                     </td>
                   </tr>
@@ -2360,6 +2615,56 @@ function SAModules() {
             )}
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+function CLAccountSettings() {
+  const [user, setUser] = useState<any>(null)
+  const [oldPw, setOldPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    authApi.me().then(setUser).catch(() => {})
+  }, [])
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      await authApi.changePassword(oldPw, newPw)
+      notify.success('Password updated')
+      setOldPw('')
+      setNewPw('')
+    } catch (err: any) {
+      notify.fromError(err)
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div>
+      <h3 className="font-display fw-700 text-white mb-20" style={{ fontSize: 20 }}>Account</h3>
+      <div className="card" style={{ maxWidth: 480 }}>
+        <div className="text-muted text-sm mb-12">Curriculum lead — canonical modules, lessons, and learning materials only.</div>
+        {user && (
+          <p style={{ marginBottom: 16, fontSize: 14 }}>
+            Signed in as <strong style={{ color: 'var(--white)' }}>{user.email}</strong>
+          </p>
+        )}
+        <form onSubmit={changePassword}>
+          <div className="form-group">
+            <label className="form-label">Current password</label>
+            <input className="form-input" type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} required />
+          </div>
+          <div className="form-group">
+            <label className="form-label">New password</label>
+            <input className="form-input" type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} required minLength={8} />
+          </div>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>{saving ? 'Saving…' : 'Update password'}</button>
+        </form>
       </div>
     </div>
   )
@@ -2535,18 +2840,24 @@ function SAClassInsights() {
   )
 }
 
-function SuperAdminDashboardInner() {
+function SuperAdminDashboardInner({ mode = 'platform' }: { mode?: 'platform' | 'curriculum' }) {
+  const isCurriculumMode = mode === 'curriculum'
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [section, setSection] = useState('overview')
+  const [section, setSection] = useState(isCurriculumMode ? 'cbt' : 'overview')
   const [loading, setLoading] = useState(true)
   const [topbarAvatarUrl, setTopbarAvatarUrl] = useState<string | undefined>()
   const [superAdminNavLabel, setSuperAdminNavLabel] = useState<string | undefined>()
-  const { data: sidebarSchools } = useData(['sa', 'sidebar-schools'], () => schoolsApi.all(), [])
-  const { data: sidebarTutors } = useData(['sa', 'sidebar-tutors'], () => tutorsApi.all(), [])
-  const { data: sidebarReports } = useData(['sa', 'sidebar-reports'], () => reportsApi.all(), [])
-  const { data: sidebarAssessments } = useData(['sa', 'sidebar-assessments'], () => cbtApi.all(), [])
-  const { data: sidebarPaymentsSummary } = useData(['sa', 'sidebar-payments-summary'], () => paymentsApi.summary(), DEFAULT_PAYMENTS_SUMMARY)
+  const { data: sidebarSchools } = useData(['sa', 'sidebar-schools'], () => schoolsApi.all(), [], !isCurriculumMode)
+  const { data: sidebarTutors } = useData(['sa', 'sidebar-tutors'], () => tutorsApi.all(), [], !isCurriculumMode)
+  const { data: sidebarReports } = useData(['sa', 'sidebar-reports'], () => reportsApi.all(), [], !isCurriculumMode)
+  const { data: sidebarAssessments } = useData(['sa', 'sidebar-assessments'], () => cbtApi.all(), [], !isCurriculumMode)
+  const { data: sidebarPaymentsSummary } = useData(
+    ['sa', 'sidebar-payments-summary'],
+    () => paymentsApi.summary(),
+    DEFAULT_PAYMENTS_SUMMARY,
+    !isCurriculumMode,
+  )
 
   const sidebarSchoolArr = Array.isArray(sidebarSchools) ? sidebarSchools : []
   const sidebarTutorArr = Array.isArray(sidebarTutors) ? sidebarTutors : []
@@ -2568,20 +2879,42 @@ function SuperAdminDashboardInner() {
 
   useEffect(() => {
     if (!localStorage.getItem('adhara_token')) { router.push('/auth/login'); return }
-    setLoading(false)
     try {
       const u = JSON.parse(localStorage.getItem('adhara_user') || '{}')
+      const role = u?.role
+      if (isCurriculumMode) {
+        if (role !== 'CURRICULUM_LEAD') {
+          router.replace(role === 'SUPER_ADMIN' ? '/dashboard/superadmin' : '/auth/login')
+          return
+        }
+      } else if (role === 'CURRICULUM_LEAD') {
+        router.replace('/dashboard/curriculum')
+        return
+      } else if (role && role !== 'SUPER_ADMIN') {
+        router.replace('/auth/login')
+        return
+      }
       const a = typeof u?.avatarUrl === 'string' ? u.avatarUrl.trim() : ''
       if (a) setTopbarAvatarUrl(a)
       const nm = [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim()
       if (nm) setSuperAdminNavLabel(nm)
     } catch { /* ignore */ }
-  }, [])
+    setLoading(false)
+  }, [isCurriculumMode, router])
 
   useEffect(() => {
     const s = searchParams.get('section')
-    if (s) setSection(s)
-  }, [searchParams])
+    if (!s) return
+    const allowed = isCurriculumMode ? ['cbt', 'tracks', 'certificates', 'settings'] : null
+    if (allowed && !allowed.includes(s)) return
+    setSection(s)
+  }, [searchParams, isCurriculumMode])
+
+  useEffect(() => {
+    if (!isCurriculumMode) return
+    const allowed = ['cbt', 'tracks', 'certificates', 'settings']
+    if (!allowed.includes(section)) setSection('cbt')
+  }, [isCurriculumMode, section])
 
   const titles: Record<string, string> = {
     overview: 'Platform Overview', schools: 'Registered Schools', approvals: 'Pending Approvals',
@@ -2605,30 +2938,35 @@ function SuperAdminDashboardInner() {
       case 'payments': return <SAPayments />
       case 'reports': return <SAReports />
       case 'assessments': return <SAAssessments />
-      case 'cbt': return <SAModules />
-      case 'tracks': return <SATracks />
+      case 'cbt': return <SAModules contentOnly={isCurriculumMode} />
+      case 'tracks': return <SATracks readOnly={isCurriculumMode} />
       case 'payroll': return <SAPayroll />
-      case 'settings': return <SASettings />
       case 'certificates': return <SACertificates />
       case 'session-logs': return <SASessionSchools />
       case 'class-insights': return <SAClassInsights />
-      default: return <SAOverview onSection={setSection} />
+      case 'settings': return isCurriculumMode ? <CLAccountSettings /> : <SASettings />
+      default: return isCurriculumMode ? <SAModules contentOnly /> : <SAOverview onSection={setSection} />
     }
   }
 
+  const shellRole = isCurriculumMode ? 'curriculum' : 'superadmin'
+  const shellTitle = isCurriculumMode
+    ? ({ cbt: 'Modules & Lessons', tracks: 'Program Tracks', certificates: 'Certificate Authorization', settings: 'Account' } as Record<string, string>)[section] || 'Curriculum'
+    : titles[section] || 'Overview'
+
   return (
-    <DashboardShell role="superadmin" title={titles[section] || 'Overview'}
-      subtitle={section === 'overview' ? 'AdharaEdu Platform · Super Admin View' : undefined}
-      section={section} onSectionChange={setSection} navBadges={sidebarBadges}
+    <DashboardShell role={shellRole} title={shellTitle}
+      subtitle={isCurriculumMode ? 'Canonical curriculum · AdharaEdu' : section === 'overview' ? 'AdharaEdu Platform · Super Admin View' : undefined}
+      section={section} onSectionChange={setSection} navBadges={isCurriculumMode ? {} : sidebarBadges}
       topbarAvatarUrl={topbarAvatarUrl}
       navUserLabel={superAdminNavLabel}
-      navUserRole="Platform Administrator">
+      navUserRole={isCurriculumMode ? 'Curriculum Lead' : 'Platform Administrator'}>
       {render()}
     </DashboardShell>
   )
 }
 
-export default function SuperAdminDashboard() {
+export default function SuperAdminDashboard({ mode = 'platform' }: { mode?: 'platform' | 'curriculum' }) {
   return (
     <Suspense
       fallback={(
@@ -2637,7 +2975,7 @@ export default function SuperAdminDashboard() {
         </div>
       )}
     >
-      <SuperAdminDashboardInner />
+      <SuperAdminDashboardInner mode={mode} />
     </Suspense>
   )
 }

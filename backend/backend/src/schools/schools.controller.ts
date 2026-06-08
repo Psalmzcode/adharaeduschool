@@ -13,6 +13,7 @@ import {
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { SchoolsService } from './schools.service';
 import { CompleteSchoolProfileDto } from './dto/complete-school-profile.dto';
+import { SaveSchoolProfileDraftDto } from './dto/save-school-profile-draft.dto';
 import { JwtAuthGuard, RolesGuard, Roles, TutorOnboardingGuard } from '../auth/guards/jwt-auth.guard';
 import { SchoolStatus } from '@prisma/client';
 
@@ -64,6 +65,13 @@ export class SchoolsController {
   @Roles('SCHOOL_ADMIN')
   completeProfile(@Request() req, @Body() dto: CompleteSchoolProfileDto) {
     return this.schoolsService.completeProfile(req.user.sub, dto);
+  }
+
+  /** Save onboarding fields without marking profile complete. */
+  @Patch('my-school/profile-draft')
+  @Roles('SCHOOL_ADMIN')
+  saveProfileDraft(@Request() req, @Body() dto: SaveSchoolProfileDraftDto) {
+    return this.schoolsService.saveProfileDraft(req.user.sub, dto);
   }
 
   @Get(':id')

@@ -33,6 +33,9 @@ import { TracksModule } from './tracks/tracks.module';
 import { PracticalsModule } from './practicals/practicals.module';
 import { ClassPerformanceModule } from './class-performance/class-performance.module';
 import { RemindersModule } from './reminders/reminders.module';
+import { SchoolTermsModule } from './school-terms/school-terms.module';
+import { AcademicAuditModule } from './academic-audit/academic-audit.module';
+import { TutorAttendanceModule } from './tutor-attendance/tutor-attendance.module';
 
 @Module({
   imports: [
@@ -52,6 +55,9 @@ import { RemindersModule } from './reminders/reminders.module';
     PracticalsModule,
     ClassPerformanceModule,
     RemindersModule,
+    SchoolTermsModule,
+    AcademicAuditModule,
+    TutorAttendanceModule,
   ],
 })
 export class AppModule {}

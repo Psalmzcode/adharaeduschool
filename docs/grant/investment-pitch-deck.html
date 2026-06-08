@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AdharaEdu — Investment Pitch Deck</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Hind:wght@400;500;600&family=Nunito:wght@400;600;700;800;900&display=swap');
+    :root { --navy: #0a1628; --gold: #d4a853; --teal: #1a7fd4; --muted: rgba(255,255,255,0.65); }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Hind', sans-serif; background: #111; }
+    @page { size: landscape; margin: 0; }
+    @media print { .slide { page-break-after: always; } .slide:last-child { page-break-after: auto; } }
+    .slide {
+      width: 297mm; height: 210mm; margin: 0 auto 8px;
+      background: linear-gradient(135deg, var(--navy) 0%, #111f38 100%);
+      color: #fff; padding: 14mm 18mm; position: relative; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .slide.light { background: #f8f9fb; color: #1a1a1a; }
+    .slide-num { position: absolute; bottom: 10mm; right: 14mm; font-size: 9pt; color: var(--muted); }
+    .logo { font-family: 'Nunito', sans-serif; font-weight: 800; font-size: 11pt; color: var(--gold); letter-spacing: 0.05em; margin-bottom: 8mm; }
+    h1 { font-family: 'Nunito', sans-serif; font-size: 38pt; font-weight: 800; line-height: 1.05; margin-bottom: 6mm; }
+    h1 span { color: var(--gold); }
+    h2 { font-family: 'Nunito', sans-serif; font-size: 24pt; font-weight: 800; margin-bottom: 5mm; color: var(--gold); }
+    .slide.light h2 { color: var(--navy); }
+    .subtitle { font-size: 14pt; color: var(--muted); max-width: 85%; line-height: 1.5; }
+    .slide.light .subtitle { color: #555; }
+    ul { margin: 4mm 0 0 6mm; font-size: 13pt; line-height: 1.65; }
+    ul li { margin-bottom: 2mm; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; margin-top: 4mm; flex: 1; }
+    .cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5mm; margin-top: 5mm; }
+    .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 5mm; }
+    .slide.light .card { background: #fff; border-color: #e5e7eb; }
+    .card h3 { font-size: 12pt; color: var(--gold); margin-bottom: 2mm; }
+    .slide.light .card h3 { color: var(--teal); }
+    .card p { font-size: 10pt; color: var(--muted); line-height: 1.45; }
+    .slide.light .card p { color: #555; }
+    .stat { text-align: center; padding: 5mm; }
+    .stat .n { font-family: 'Nunito', sans-serif; font-size: 28pt; font-weight: 800; color: var(--gold); }
+    .stat .l { font-size: 9pt; color: var(--muted); margin-top: 2mm; }
+    .slide.light .stat .l { color: #666; }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; margin-top: 4mm; }
+    th, td { border: 1px solid rgba(255,255,255,0.15); padding: 3mm 4mm; text-align: left; }
+    .slide.light th, .slide.light td { border-color: #ddd; }
+    th { background: rgba(212,168,83,0.2); color: var(--gold); }
+    .slide.light th { background: var(--navy); color: #fff; }
+    .ask-box { background: rgba(212,168,83,0.15); border: 2px solid var(--gold); border-radius: 12px; padding: 6mm; margin-top: 5mm; text-align: center; }
+    .ask-box .amt { font-family: 'Nunito', sans-serif; font-size: 32pt; font-weight: 800; color: var(--gold); }
+    .contact { margin-top: auto; font-size: 11pt; color: var(--muted); }
+    .contact strong { color: var(--gold); }
+  </style>
+</head>
+<body>
+
+<!-- SLIDE 1 -->
+<section class="slide">
+  <p class="logo">ADHARAEDU</p>
+  <h1>Equipping Students for the<br/><span>Digital Economy</span></h1>
+  <p class="subtitle">Practical digital skills for academic success, university prep &amp; careers — in your lab, on your timetable, with measurable outcomes.</p>
+  <div class="cols-3" style="margin-top:10mm;">
+    <div class="stat"><div class="n">3</div><div class="l">Learning Tracks</div></div>
+    <div class="stat"><div class="n">₦15k</div><div class="l">Per Student / Term</div></div>
+    <div class="stat"><div class="n">4 wks</div><div class="l">To Programme Launch</div></div>
+  </div>
+  <p class="contact"><strong>AdharaEdu Tech Solutions Limited</strong> · Nigeria · info@adharaedu.com · +234 816 048 6223</p>
+  <p class="slide-num">1 / 12</p>
+</section>
+
+<!-- SLIDE 2: PROBLEM -->
+<section class="slide light">
+  <p class="logo" style="color:var(--navy);">THE PROBLEM</p>
+  <h2>Schools can't deliver — or prove — practical tech education</h2>
+  <div class="cols">
+    <ul>
+      <li>Theory-heavy ICT; little hands-on coding or digital literacy</li>
+      <li>No trained facilitators or structured curriculum at scale</li>
+      <li>Students use cybercafés for basic digital tasks — not school labs</li>
+      <li>Girls, rural &amp; public-school students left out of bootcamps</li>
+    </ul>
+    <ul>
+      <li>Admins juggle WhatsApp, Excel, paper registers</li>
+      <li>No verifiable certificates or assessment data for funders</li>
+      <li>One-off NGO workshops don't sustain across terms</li>
+      <li><strong>Result:</strong> youth unprepared for jobs &amp; freelancing</li>
+    </ul>
+  </div>
+  <p class="slide-num" style="color:#999;">2 / 12</p>
+</section>
+
+<!-- SLIDE 3: SOLUTION -->
+<section class="slide">
+  <p class="logo">OUR SOLUTION</p>
+  <h2 style="color:#fff;">Turnkey in-school tech program + platform</h2>
+  <p class="subtitle">Delivered in your computer lab — trained tutors, structured materials, measurable outcomes.</p>
+  <div class="cols-3">
+    <div class="card"><h3>Wk 1</h3><p>Partnership agreement &amp; scheduling</p></div>
+    <div class="card"><h3>Wk 2–3</h3><p>Tutor prep, school coordination, orientation &amp; materials</p></div>
+    <div class="card"><h3>Wk 4</h3><p>Programme launch on school timetable</p></div>
+  </div>
+  <p class="slide-num">3 / 12</p>
+</section>
+
+<!-- SLIDE 4: PRODUCT -->
+<section class="slide light">
+  <p class="logo" style="color:var(--navy);">PRODUCT</p>
+  <h2>Three progressive tracks</h2>
+  <div class="cols-3">
+    <div class="card">
+      <h3>Digital Foundations</h3>
+      <p>File management, typing, Word, Excel, responsible internet use</p>
+    </div>
+    <div class="card">
+      <h3>Intro to Programming</h3>
+      <p>Scratch logic → HTML &amp; CSS multi-page websites</p>
+    </div>
+    <div class="card">
+      <h3>Advanced Tech &amp; Career</h3>
+      <p>JavaScript, Python, personal project portfolio</p>
+    </div>
+  </div>
+  <p class="subtitle" style="margin-top:6mm;">Assessment: practical task + theory · Certificates of Completion · Platform: CBT · Paystack · dashboards</p>
+  <p class="slide-num" style="color:#999;">4 / 12</p>
+</section>
+
+<!-- SLIDE 5: MARKET -->
+<section class="slide">
+  <p class="logo">MARKET</p>
+  <h2 style="color:#fff;">40,000+ secondary schools in Nigeria</h2>
+  <div class="cols">
+    <div>
+      <ul>
+        <li><strong>Primary customers:</strong> Private &amp; public secondary schools</li>
+        <li><strong>End users:</strong> JSS–SS students, parents, tutors</li>
+        <li><strong>Buyers:</strong> School owners, principals, ICT coordinators</li>
+        <li><strong>Channel partners:</strong> NGOs, state education boards, CSR</li>
+      </ul>
+    </div>
+    <div>
+      <ul>
+        <li>Government push for digital literacy &amp; STEM</li>
+        <li>Growing freelance / remote work economy (Fiverr, Upwork)</li>
+        <li>Schools competing on ICT reputation &amp; outcomes</li>
+        <li>Grant funding for youth digital skills at record levels</li>
+      </ul>
+    </div>
+  </div>
+  <p class="slide-num">5 / 12</p>
+</section>
+
+<!-- SLIDE 6: BUSINESS MODEL -->
+<section class="slide light">
+  <p class="logo" style="color:var(--navy);">BUSINESS MODEL</p>
+  <h2>B2B school partnerships</h2>
+  <table>
+    <tr><th>Programme</th><th>Fee</th></tr>
+    <tr><td>Tech Skills Education Programme</td><td><strong>₦15,000 / student / term</strong></td></tr>
+    <tr><td>Institutional pricing</td><td>Custom rates for multiple classes or full-school enrollment</td></tr>
+    <tr><td>Add-on services</td><td>Staff training, website, bootcamps, grant support</td></tr>
+  </table>
+  <p class="subtitle" style="margin-top:5mm;">Unit economics improve as curriculum &amp; platform scale across schools; tutors shared across network.</p>
+  <p class="slide-num" style="color:#999;">6 / 12</p>
+</section>
+
+<!-- SLIDE 7: TRACTION -->
+<section class="slide">
+  <p class="logo">TRACTION</p>
+  <h2 style="color:#fff;">Live product. Real school operations.</h2>
+  <div class="cols">
+    <ul>
+      <li>Production platform deployed (NestJS API + Next.js app)</li>
+      <li>[X] partner schools in [states/cities]</li>
+      <li>[X] students enrolled across 3 tracks</li>
+      <li>[X] vetted tutors deployed</li>
+    </ul>
+    <ul>
+      <li>CBT builder, vetting, scheduling &amp; auto-grade live</li>
+      <li>Verifiable certificates (QR + public URL)</li>
+      <li>Paystack payment collection integrated</li>
+      <li>[Add: testimonials, MOUs, awards]</li>
+    </ul>
+  </div>
+  <p class="slide-num">7 / 12</p>
+</section>
+
+<!-- SLIDE 8: COMPETITION -->
+<section class="slide light">
+  <p class="logo" style="color:var(--navy);">COMPETITION</p>
+  <h2>We own the in-school delivery layer</h2>
+  <table>
+    <tr><th>Alternative</th><th>Gap</th><th>AdharaEdu</th></tr>
+    <tr><td>Learning apps (uLesson, etc.)</td><td>Home study; not school program</td><td>In-lab, timetable-integrated</td></tr>
+    <tr><td>Bootcamps (AltSchool, etc.)</td><td>Expensive; excludes rural/public</td><td>Affordable; uses school access</td></tr>
+    <tr><td>School ERP (Edves, etc.)</td><td>Admin only; no curriculum/tutors</td><td>Full program + platform</td></tr>
+    <tr><td>NGO workshops</td><td>One-off; no measurement</td><td>Multi-term + dashboards</td></tr>
+  </table>
+  <p class="slide-num" style="color:#999;">8 / 12</p>
+</section>
+
+<!-- SLIDE 9: TEAM -->
+<section class="slide">
+  <p class="logo">TEAM</p>
+  <h2 style="color:#fff;">Educator + engineer founding team</h2>
+  <div class="cols">
+    <div class="card">
+      <h3>Ali Samuel Chidera — CEO</h3>
+      <p>Former technology educator. Built AdharaEdu after seeing students rely on cybercafés for basic digital practice. Focus: labs, tutors, inclusion.</p>
+    </div>
+    <div class="card">
+      <h3>Okechukwu Emmanuel Ukwueji — CTO</h3>
+      <p>Platform architect. Builds reliable school dashboards &amp; assessments for slow internet and limited devices.</p>
+    </div>
+  </div>
+  <p class="slide-num">9 / 12</p>
+</section>
+
+<!-- SLIDE 10: USE OF FUNDS -->
+<section class="slide light">
+  <p class="logo" style="color:var(--navy);">USE OF FUNDS</p>
+  <h2>12-month deployment plan</h2>
+  <div class="cols-3">
+    <div class="card"><h3>40% · Schools</h3><p>Onboard [X] schools, admin training, enrollment</p></div>
+    <div class="card"><h3>35% · Tutors</h3><p>Recruit, train, stipends, quality assurance</p></div>
+    <div class="card"><h3>15% · Labs</h3><p>Device/connectivity support where needed</p></div>
+  </div>
+  <div class="cols" style="margin-top:4mm;">
+    <div class="card"><h3>5% · M&amp;E</h3><p>Pre/post skills assessments, impact report</p></div>
+    <div class="card"><h3>5% · Platform</h3><p>Hosting, support, partnership growth</p></div>
+  </div>
+  <p class="slide-num" style="color:#999;">10 / 12</p>
+</section>
+
+<!-- SLIDE 11: ASK -->
+<section class="slide">
+  <p class="logo">THE ASK</p>
+  <h2 style="color:#fff;">Funding to scale school partnerships</h2>
+  <div class="ask-box">
+    <p style="color:var(--muted);margin-bottom:3mm;">Funding requested</p>
+    <p class="amt">[$XX,000 – $XX,000]</p>
+    <p style="color:var(--muted);margin-top:3mm;font-size:11pt;">Instrument: [Grant / Loan / Open to discussion]</p>
+  </div>
+  <ul style="margin-top:6mm;">
+    <li>Onboard <strong>[X] new schools</strong> · Serve <strong>[X] students</strong></li>
+    <li>Achieve <strong>[X]%</strong> module completion &amp; certificate issuance</li>
+    <li>Publish verified impact report for stakeholders</li>
+  </ul>
+  <p class="slide-num">11 / 12</p>
+</section>
+
+<!-- SLIDE 12: CLOSE -->
+<section class="slide">
+  <p class="logo">THANK YOU</p>
+  <h1>Let's equip the<br/><span>next generation</span></h1>
+  <p class="subtitle">Partner with AdharaEdu to turn school computer labs into pipelines of digital literacy and employable skills.</p>
+  <p class="contact" style="margin-top:12mm;">
+    <strong>Ali Samuel Chidera</strong> · CEO<br/>
+    info@adharaedu.com · +234 816 048 6223
+  </p>
+  <p class="slide-num">12 / 12</p>
+</section>
+
+</body>
+</html>

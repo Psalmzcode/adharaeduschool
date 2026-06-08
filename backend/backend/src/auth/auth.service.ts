@@ -465,13 +465,16 @@ export class AuthService {
   private async findUserByLoginIdentifier(identifier: string) {
     const raw = identifier.trim();
     if (!raw) return null;
+    // Allow users to type @handle for student usernames.
+    // IMPORTANT: avoid treating "@nafisau0" as an email address.
+    const handle = raw.startsWith('@') ? raw.slice(1).trim() : '';
     const include = {
       school: true,
       tutorProfile: true,
       studentProfile: true,
       parentProfile: true,
     } as const;
-    if (raw.includes('@')) {
+    if (!handle && raw.includes('@')) {
       return this.prisma.user.findFirst({
         where: { email: { equals: raw, mode: 'insensitive' } },
         include,
@@ -489,7 +492,7 @@ export class AuthService {
         include,
       });
     }
-    const lower = raw.toLowerCase();
+    const lower = (handle || raw).toLowerCase();
     return this.prisma.user.findUnique({
       where: { username: lower },
       include,

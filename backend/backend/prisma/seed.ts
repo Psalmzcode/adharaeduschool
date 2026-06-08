@@ -80,6 +80,25 @@ async function main() {
   });
   console.log('✅ Super admin created:', superAdmin.email);
 
+  const curriculumLeadPw = await argon2.hash(process.env.CURRICULUM_LEAD_PASSWORD || 'Curriculum@123');
+  const curriculumLead = await prisma.user.upsert({
+    where: { email: process.env.CURRICULUM_LEAD_EMAIL || 'curriculum@adharaedu.com' },
+    update: {
+      password: curriculumLeadPw,
+      firstName: 'Curriculum',
+      lastName: 'Lead',
+      role: 'CURRICULUM_LEAD',
+    },
+    create: {
+      email: process.env.CURRICULUM_LEAD_EMAIL || 'curriculum@adharaedu.com',
+      password: curriculumLeadPw,
+      firstName: 'Curriculum',
+      lastName: 'Lead',
+      role: 'CURRICULUM_LEAD',
+    },
+  });
+  console.log('✅ Curriculum lead created:', curriculumLead.email);
+
   /** Canonical module spine — aligned with AdharaEdu student handbooks (Tracks 1–3). */
   const moduleUpsertFields = (m: {
     number: number;
@@ -127,13 +146,13 @@ async function main() {
     }
   }
 
-  /** Term exam module per track — anchors a combined CBT for the term. */
+  /** Optional termly assessment per track — not required for certificates. */
   async function upsertTermExamModule(track: TrackLevel, termOrdinal: 1 | 2 | 3) {
     const number = 90 + termOrdinal; // keep exam modules out of the standard handbook range
-    const title = `Term ${termOrdinal} Main Exam`;
+    const title = `Term ${termOrdinal} Termly Assessment`;
     const description =
-      `Term ${termOrdinal} combined assessment for ${String(track).replace('TRACK_', 'Track ')}. ` +
-      `Draft questions spanning all modules taught in the term.`;
+      `Optional termly combined CBT for ${String(track).replace('TRACK_', 'Track ')}. ` +
+      `Spans modules taught in the term; not required for track certificates.`;
     const objectives = [
       'Assess theory and practical understanding across the term',
       'Provide a consistent termly benchmark across schools',
@@ -175,6 +194,59 @@ async function main() {
       });
       if (modulesHasExamFields) {
         await prisma.$executeRaw`UPDATE "modules" SET "moduleType" = 'TERM_EXAM', "termOrdinal" = ${termOrdinal} WHERE "id" = ${created.id}`;
+      }
+    }
+  }
+
+  /** One capstone exam per track — required for certificate eligibility (≥50%). */
+  async function upsertTrackCompletionExamModule(track: TrackLevel) {
+    const number = 99;
+    const trackLabel = String(track).replace('TRACK_', 'Track ');
+    const title = `${trackLabel} Completion Exam`;
+    const description =
+      `Final track capstone CBT after all standard modules on ${trackLabel} are complete. ` +
+      `Required for certificate eligibility (score ≥ 50%).`;
+    const objectives = [
+      'Assess integrated understanding across the full track curriculum',
+      'Serve as the certificate gate alongside completed standard modules',
+    ];
+    const existing = await prisma.module.findFirst({
+      where: { track, number, stackVariant: ModuleStackVariant.COMMON } as Prisma.ModuleWhereInput,
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.module.update({
+        where: { id: existing.id },
+        data: {
+          track,
+          number,
+          stackVariant: ModuleStackVariant.COMMON as any,
+          title,
+          description,
+          objectives,
+          durationWeeks: 1,
+          isActive: true,
+        } as any,
+      });
+      if (modulesHasExamFields) {
+        await prisma.$executeRaw`UPDATE "modules" SET "moduleType" = 'TRACK_COMPLETION_EXAM', "termOrdinal" = NULL WHERE "id" = ${existing.id}`;
+      }
+    } else {
+      const created = await prisma.module.create({
+        data: {
+          track,
+          number,
+          stackVariant: ModuleStackVariant.COMMON as any,
+          title,
+          description,
+          objectives,
+          durationWeeks: 1,
+          isActive: true,
+        } as any,
+        select: { id: true },
+      });
+      if (modulesHasExamFields) {
+        await prisma.$executeRaw`UPDATE "modules" SET "moduleType" = 'TRACK_COMPLETION_EXAM', "termOrdinal" = NULL WHERE "id" = ${created.id}`;
       }
     }
   }
@@ -457,7 +529,12 @@ async function main() {
     await upsertTermExamModule(TrackLevel.TRACK_2, termOrdinal);
     await upsertTermExamModule(TrackLevel.TRACK_3, termOrdinal);
   }
-  console.log('✅ Term exam modules seeded (Track 1–3 × Term 1–3)');
+  console.log('✅ Termly assessment modules seeded (Track 1–3 × Term 1–3)');
+
+  for (const track of [TrackLevel.TRACK_1, TrackLevel.TRACK_2, TrackLevel.TRACK_3] as const) {
+    await upsertTrackCompletionExamModule(track);
+  }
+  console.log('✅ Track completion exam modules seeded (Track 1–3)');
 
   // Track 1 — curriculum lessons (Module 1–2, handbook-aligned; published for tutor session tagging)
   const t1Module = async (num: number) =>
@@ -1149,7 +1226,7 @@ async function main() {
       },
     });
     await prisma.practicalSubmission.upsert({
-      where: { taskId_studentId: { taskId: practicalTaskId, studentId: student.id } },
+      where: { taskId_studentId_attempt: { taskId: practicalTaskId, studentId: student.id, attempt: 1 } },
       update: {
         totalScore: 86,
         status: 'GRADED',
@@ -1159,6 +1236,7 @@ async function main() {
       create: {
         taskId: practicalTaskId,
         studentId: student.id,
+        attempt: 1,
         evidenceText: 'Seed practical evidence',
         totalScore: 86,
         status: 'GRADED',
@@ -1167,7 +1245,7 @@ async function main() {
       },
     });
     await prisma.practicalSubmission.upsert({
-      where: { taskId_studentId: { taskId: practicalTaskId, studentId: student2.id } },
+      where: { taskId_studentId_attempt: { taskId: practicalTaskId, studentId: student2.id, attempt: 1 } },
       update: {
         totalScore: 69,
         status: 'GRADED',
@@ -1177,6 +1255,7 @@ async function main() {
       create: {
         taskId: practicalTaskId,
         studentId: student2.id,
+        attempt: 1,
         evidenceText: 'Seed practical evidence',
         totalScore: 69,
         status: 'GRADED',

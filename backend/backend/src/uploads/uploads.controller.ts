@@ -30,7 +30,11 @@ export class UploadsController {
   }
 
   @Get()
-  getByEntity(@Query('entityType') entityType: string, @Query('entityId') entityId: string) {
-    return this.uploadsService.getUploadsByEntity(entityType, entityId);
+  getByEntity(
+    @Query('entityType') entityType: string,
+    @Query('entityId') entityId: string,
+    @Request() req: { user: { sub: string; role: string } },
+  ) {
+    return this.uploadsService.getUploadsByEntity(entityType, entityId, req.user);
   }
 }

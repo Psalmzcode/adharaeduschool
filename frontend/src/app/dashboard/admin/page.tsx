@@ -6,8 +6,11 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
 import { ClassPerformancePanel } from '@/components/ClassPerformancePanel'
+import { TutorDeliveryPanel } from '@/components/TutorDeliveryPanel'
+import { SchoolTermsPanel } from '@/components/SchoolTermsPanel'
+import { AcademicAuditPanel } from '@/components/AcademicAuditPanel'
 import { SchoolProfileView } from '@/components/school/SchoolProfileView'
-import { schoolsApi, studentsApi, noticesApi, examsApi, attendanceApi, bulkUploadApi, paymentsApi, paystackApi, certificatesApi, tutorsApi, schoolClassesApi, reportsApi, tracksApi, practicalsApi } from '@/lib/api'
+import { schoolsApi, studentsApi, noticesApi, examsApi, attendanceApi, bulkUploadApi, paymentsApi, paystackApi, tutorsApi, schoolClassesApi, reportsApi, tracksApi, practicalsApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 
 // ── tiny reusable pieces ──────────────────────────────────────────────────
@@ -74,6 +77,28 @@ function Modal({open,onClose,title,children}:{open:boolean,onClose:()=>void,titl
 
 // ── section components ────────────────────────────────────────────────────
 function Overview({school,stats,topStudents,attendanceData,notices,upcomingExams,onAddStudent}:{school:any,stats:any,topStudents:any[],attendanceData:any[],notices:any[],upcomingExams:any[],onAddStudent:()=>void}) {
+  const today = new Date()
+  const [calCursor, setCalCursor] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
+
+  const monthLabel = calCursor.toLocaleDateString('en-NG', { month: 'long', year: 'numeric' })
+  const daysInMonth = new Date(calCursor.getFullYear(), calCursor.getMonth() + 1, 0).getDate()
+  // Sunday = 0. Our grid is S..S.
+  const firstWeekday = new Date(calCursor.getFullYear(), calCursor.getMonth(), 1).getDay()
+
+  const isSameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+
+  const examDaySet = (() => {
+    const set = new Set<number>()
+    for (const e of Array.isArray(upcomingExams) ? upcomingExams : []) {
+      const raw = e?.scheduledAt || e?.date
+      const d = raw ? new Date(raw) : null
+      if (!d || Number.isNaN(d.getTime())) continue
+      if (d.getFullYear() !== calCursor.getFullYear() || d.getMonth() !== calCursor.getMonth()) continue
+      set.add(d.getDate())
+    }
+    return set
+  })()
   const totalStudentsVal = stats?.totalStudents ?? '—'
   const attendanceRateVal = stats?.attendanceRate != null ? `${stats.attendanceRate}%` : '—'
   const avgScoreVal = stats?.avgScore != null ? `${stats.avgScore}%` : '—'
@@ -144,18 +169,39 @@ function Overview({school,stats,topStudents,attendanceData,notices,upcomingExams
           {/* Calendar */}
           <div className="card">
             <div className="flex-between mb-16">
-              <div className="font-display fw-700 text-white" style={{fontSize:15}}>March 2026</div>
+              <div className="font-display fw-700 text-white" style={{fontSize:15}}>{monthLabel}</div>
               <div style={{display:'flex',gap:8}}>
-                <button className="topbar-icon-btn" style={{width:28,height:28,fontSize:12}}>‹</button>
-                <button className="topbar-icon-btn" style={{width:28,height:28,fontSize:12}}>›</button>
+                <button
+                  type="button"
+                  className="topbar-icon-btn"
+                  style={{width:28,height:28,fontSize:12}}
+                  onClick={() => setCalCursor((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
+                  aria-label="Previous month"
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  className="topbar-icon-btn"
+                  style={{width:28,height:28,fontSize:12}}
+                  onClick={() => setCalCursor((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
+                  aria-label="Next month"
+                >
+                  ›
+                </button>
               </div>
             </div>
             <div className="cal-grid">
               {['S','M','T','W','T','F','S'].map((d,i)=><div key={i} className="cal-day-label">{d}</div>)}
-              <div className="cal-day" style={{gridColumn:1}}></div>
-              {[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31].map(d=>(
-                <div key={d} className={`cal-day${[4,9,12,15,17,26].includes(d)?' has-event':''}${d===17?' today':''}`}>{d}</div>
-              ))}
+              {firstWeekday > 0 && <div className="cal-day" style={{gridColumn:firstWeekday + 1}}></div>}
+              {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
+                const date = new Date(calCursor.getFullYear(), calCursor.getMonth(), day)
+                const hasEvent = examDaySet.has(day)
+                const isToday = isSameDay(date, today)
+                return (
+                  <div key={day} className={`cal-day${hasEvent ? ' has-event' : ''}${isToday ? ' today' : ''}`}>{day}</div>
+                )
+              })}
             </div>
             <div className="divider mt-16 mb-12"></div>
             <div style={{fontSize:13,display:'flex',flexDirection:'column',gap:10}}>
@@ -180,7 +226,7 @@ function Overview({school,stats,topStudents,attendanceData,notices,upcomingExams
             {[
               {dot:'var(--gold)',text:'Emeka Chukwu completed Track 1 with 96% score.',time:'2h ago'},
               {dot:'var(--danger)',text:'Tunde Ibrahim missed 3 consecutive sessions.',time:'5h ago'},
-              {dot:'var(--teal)',text:'28 certificates ready for Track 1 completers.',time:'1d ago'},
+              {dot:'var(--teal)',text:'Track completers await AdharaEdu certificate authorization.',time:'1d ago'},
               {dot:'var(--info)',text:'February payment reconciliation report available.',time:'2d ago'},
             ].map((n,i)=>(
               <div key={i} className="notif-item">
@@ -218,8 +264,8 @@ function Overview({school,stats,topStudents,attendanceData,notices,upcomingExams
             <svg width="120" height="120" viewBox="0 0 120 120" className="progress-ring">
               <circle className="progress-ring-bg" cx="60" cy="60" r="52"/>
               <circle className="progress-ring-fill" cx="60" cy="60" r="52" stroke="url(#gr1)" strokeDasharray="326.7" strokeDashoffset="82"/>
-              <text x="60" y="56" fill="white" fontFamily="Syne,sans-serif" fontSize="20" fontWeight="800" textAnchor="middle">347</text>
-              <text x="60" y="72" fill="rgba(248,245,239,0.5)" fontFamily="DM Sans,sans-serif" fontSize="11" textAnchor="middle">Students</text>
+              <text x="60" y="56" fill="white" fontFamily="Nunito,sans-serif" fontSize="20" fontWeight="800" textAnchor="middle">347</text>
+              <text x="60" y="72" fill="rgba(248,245,239,0.5)" fontFamily="Hind,sans-serif" fontSize="11" textAnchor="middle">Students</text>
               <defs><linearGradient id="gr1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stopColor="var(--gold)"/><stop offset="100%" stopColor="var(--teal2)"/></linearGradient></defs>
             </svg>
             <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -258,7 +304,6 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
     acc[t.code] = t.label
     return acc
   }, {})
-  const DEFAULT_CLASSES = ['JSS1A','JSS1B','JSS2A','SS1A','SS1B','SS2A','SS2B','SS3A','SS3B']
   const [students, setStudents] = useState<any[]>([])
   const [search, setSearch] = useState('')
   const [termFilter, setTermFilter] = useState<string>('ALL')
@@ -266,11 +311,12 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
   const [loadingPracticals, setLoadingPracticals] = useState(false)
   const [practicalAvgByStudentId, setPracticalAvgByStudentId] = useState<Record<string, number>>({})
   const [showAdd, setShowAdd] = useState(false)
+  const [creatingStudent, setCreatingStudent] = useState(false)
   const [tempPwByStudentId, setTempPwByStudentId] = useState<Record<string, string>>({})
   const [revealPwByStudentId, setRevealPwByStudentId] = useState<Record<string, boolean>>({})
   const [resettingPwByStudentId, setResettingPwByStudentId] = useState<Record<string, boolean>>({})
   const [manualClassTrackMap, setManualClassTrackMap] = useState<Record<string, string>>({})
-  const [form, setForm] = useState({firstName:'',lastName:'',email:'',className:'SS3A',track:'TRACK_1'})
+  const [form, setForm] = useState({firstName:'',lastName:'',email:'',className:'',track:'TRACK_1'})
   const resolvedTermLabel = (() => {
     const y = String(school?.academicYearLabel || '').trim()
     const t = String(school?.currentTermLabel || '').trim()
@@ -314,12 +360,15 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
     e.preventDefault()
     const resolvedTrack = classTrackMap[form.className] || form.track
     try {
+      setCreatingStudent(true)
       await studentsApi.create({ ...form, track: resolvedTrack, schoolId: school?.id, termLabel: resolvedTermLabel })
       notify.success('Student created')
       setShowAdd(false)
       loadStudents()
     } catch (e: any) {
       notify.fromError(e, 'Could not create student')
+    } finally {
+      setCreatingStudent(false)
     }
   }
 
@@ -352,7 +401,7 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
     return acc
   }, {})
   const classTrackMap = { ...manualClassTrackMap, ...resolvedObservedMap }
-  const classOptions = Array.from(new Set([...DEFAULT_CLASSES, ...Object.keys(classTrackMap)])).sort()
+  const classOptions = Array.from(new Set([...Object.keys(manualClassTrackMap), ...Object.keys(resolvedObservedMap)])).filter(Boolean).sort()
   const filteredList = selectedClass ? list.filter((s:any)=>s.className===selectedClass) : list
   const termOptions = Array.from(
     new Set(
@@ -367,6 +416,13 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
       setForm((prev) => ({ ...prev, track: derivedTrack }))
     }
   }, [form.className, form.track, classTrackMap])
+
+  // Default to the first available class for this school (from saved classes / existing students).
+  useEffect(() => {
+    if (form.className) return
+    if (!classOptions.length) return
+    setForm((prev) => ({ ...prev, className: classOptions[0] }))
+  }, [form.className, classOptions.join('|')])
   useEffect(() => {
     const loadPracticalScores = async () => {
       if (!school?.id || !selectedClass) {
@@ -471,18 +527,19 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
 
   return (
     <>
-      <Modal open={showAdd} onClose={()=>setShowAdd(false)} title="Add New Student">
+      <Modal open={showAdd} onClose={() => !creatingStudent && setShowAdd(false)} title="Add New Student">
         <form onSubmit={addStudent} style={{display:'flex',flexDirection:'column',gap:16}}>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>First Name</label><input className="form-input" required value={form.firstName} onChange={e=>setForm({...form,firstName:e.target.value})} placeholder="Aisha"/></div>
-            <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Last Name</label><input className="form-input" required value={form.lastName} onChange={e=>setForm({...form,lastName:e.target.value})} placeholder="Okonkwo"/></div>
+            <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>First Name</label><input className="form-input" required disabled={creatingStudent} value={form.firstName} onChange={e=>setForm({...form,firstName:e.target.value})} placeholder="Aisha"/></div>
+            <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Last Name</label><input className="form-input" required disabled={creatingStudent} value={form.lastName} onChange={e=>setForm({...form,lastName:e.target.value})} placeholder="Okonkwo"/></div>
           </div>
-          <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Email Address</label><input type="email" className="form-input" required value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="student@school.edu.ng"/></div>
+          <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Email Address</label><input type="email" className="form-input" required disabled={creatingStudent} value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="student@school.edu.ng"/></div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
             <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Class</label>
               <select
                 className="form-input"
                 value={form.className}
+                disabled={creatingStudent}
                 onChange={e=>{
                   const nextClass = e.target.value
                   setForm((prev) => ({
@@ -502,8 +559,10 @@ function StudentsSection({school,selectedClass,onClearClass,onBackToClasses}:{sc
             </div>
           </div>
           <div style={{display:'flex',gap:12,marginTop:8}}>
-            <button type="button" onClick={()=>setShowAdd(false)} className="btn btn-ghost" style={{flex:1,justifyContent:'center'}}>Cancel</button>
-            <button type="submit" className="btn btn-primary" style={{flex:2,justifyContent:'center'}}>Add Student →</button>
+            <button type="button" onClick={()=>setShowAdd(false)} className="btn btn-ghost" style={{flex:1,justifyContent:'center'}} disabled={creatingStudent}>Cancel</button>
+            <button type="submit" className="btn btn-primary" style={{flex:2,justifyContent:'center'}} disabled={creatingStudent}>
+              {creatingStudent ? 'Adding…' : 'Add Student →'}
+            </button>
           </div>
         </form>
       </Modal>
@@ -647,6 +706,7 @@ function ClassesSection({ school, onOpenClass }: { school: any; onOpenClass: (cl
   const [studentsRaw, setStudentsRaw] = useState<any[]>([])
   const [savedClasses, setSavedClasses] = useState<Array<{ className: string; track: string }>>([])
   const [showAddClass, setShowAddClass] = useState(false)
+  const [creatingClass, setCreatingClass] = useState(false)
   const [form, setForm] = useState({ className: '', primaryTrack: '' })
 
   useEffect(() => {
@@ -719,6 +779,7 @@ function ClassesSection({ school, onOpenClass }: { school: any; onOpenClass: (cl
       notify.warning('Class already exists')
       return
     }
+    setCreatingClass(true)
     try {
       const created = await schoolClassesApi.create({
         schoolId: school?.id,
@@ -730,12 +791,14 @@ function ClassesSection({ school, onOpenClass }: { school: any; onOpenClass: (cl
       setForm({ className: '', primaryTrack: form.primaryTrack })
     } catch (err: any) {
       notify.error(err?.message || 'Failed to create class')
+    } finally {
+      setCreatingClass(false)
     }
   }
 
   return (
     <>
-      <Modal open={showAddClass} onClose={() => setShowAddClass(false)} title="Add Class">
+      <Modal open={showAddClass} onClose={() => !creatingClass && setShowAddClass(false)} title="Add Class">
         <form onSubmit={addClass} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <label className="form-label">Class Name</label>
@@ -745,6 +808,7 @@ function ClassesSection({ school, onOpenClass }: { school: any; onOpenClass: (cl
               value={form.className}
               onChange={(e) => setForm({ ...form, className: e.target.value })}
               required
+              disabled={creatingClass}
             />
           </div>
           <div>
@@ -754,6 +818,7 @@ function ClassesSection({ school, onOpenClass }: { school: any; onOpenClass: (cl
               value={form.primaryTrack}
               onChange={(e) => setForm({ ...form, primaryTrack: e.target.value })}
               style={{ appearance: 'none' }}
+              disabled={creatingClass}
             >
               {(trackOptions.length ? trackOptions : [{ code: 'TRACK_1', label: 'Track 1' }, { code: 'TRACK_2', label: 'Track 2' }, { code: 'TRACK_3', label: 'Track 3' }]).map((t) => (
                 <option key={t.code} value={t.code}>{t.label}</option>
@@ -761,8 +826,12 @@ function ClassesSection({ school, onOpenClass }: { school: any; onOpenClass: (cl
             </select>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button type="submit" className="btn btn-primary btn-sm">Add Class</button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAddClass(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={creatingClass}>
+              {creatingClass ? 'Adding…' : 'Add Class'}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAddClass(false)} disabled={creatingClass}>
+              Cancel
+            </button>
           </div>
         </form>
       </Modal>
@@ -1030,6 +1099,8 @@ function AnnouncementsSection({school}:{school:any}) {
   const [notices, setNotices] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
+  const [posting, setPosting] = useState(false)
+  const [deletingId, setDeletingId] = useState<string>('')
   const [form, setForm] = useState({title:'',body:'',type:'INFO'})
 
   useEffect(()=>{
@@ -1049,6 +1120,8 @@ function AnnouncementsSection({school}:{school:any}) {
 
   const postNotice = async (e:React.FormEvent) => {
     e.preventDefault()
+    if (posting) return
+    setPosting(true)
     try {
       await noticesApi.create({ ...form, schoolId: school?.id })
       notify.success('Announcement posted')
@@ -1056,9 +1129,13 @@ function AnnouncementsSection({school}:{school:any}) {
       if (school?.id) noticesApi.all(school.id).then((d: any) => setNotices(d || []))
     } catch (e: any) {
       notify.fromError(e, 'Could not post announcement')
+    } finally {
+      setPosting(false)
     }
   }
   const deleteNotice = async (id:string) => {
+    if (!id || deletingId) return
+    setDeletingId(id)
     try { 
       const token = localStorage.getItem('adhara_token')
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL||'http://localhost:3001/api/v1'}/notices/${id}`, {
@@ -1073,6 +1150,8 @@ function AnnouncementsSection({school}:{school:any}) {
       notify.success('Announcement deleted')
     } catch (e: any) {
       notify.fromError(e, 'Could not delete announcement')
+    } finally {
+      setDeletingId('')
     }
   }
 
@@ -1082,18 +1161,20 @@ function AnnouncementsSection({school}:{school:any}) {
 
   return (
     <>
-      <Modal open={showAdd} onClose={()=>setShowAdd(false)} title="Post New Announcement">
+      <Modal open={showAdd} onClose={() => !posting && setShowAdd(false)} title="Post New Announcement">
         <form onSubmit={postNotice} style={{display:'flex',flexDirection:'column',gap:16}}>
           <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Type</label>
-            <select className="form-input" value={form.type} onChange={e=>setForm({...form,type:e.target.value})} style={{appearance:'none'}}>
+            <select className="form-input" value={form.type} onChange={e=>setForm({...form,type:e.target.value})} style={{appearance:'none'}} disabled={posting}>
               <option value="INFO">Info</option><option value="IMPORTANT">Important</option><option value="URGENT">Urgent</option>
             </select>
           </div>
-          <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Title</label><input className="form-input" required value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="Exam postponement notice…"/></div>
-          <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Message</label><textarea className="form-input" rows={4} required value={form.body} onChange={e=>setForm({...form,body:e.target.value})} style={{resize:'vertical'}} placeholder="Full notice text…"/></div>
+          <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Title</label><input className="form-input" required disabled={posting} value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="Exam postponement notice…"/></div>
+          <div><label style={{display:'block',fontSize:12,color:'var(--muted)',marginBottom:6,fontFamily:'var(--font-display)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Message</label><textarea className="form-input" rows={4} required disabled={posting} value={form.body} onChange={e=>setForm({...form,body:e.target.value})} style={{resize:'vertical'}} placeholder="Full notice text…"/></div>
           <div style={{display:'flex',gap:12}}>
-            <button type="button" onClick={()=>setShowAdd(false)} className="btn btn-ghost" style={{flex:1,justifyContent:'center'}}>Cancel</button>
-            <button type="submit" className="btn btn-primary" style={{flex:2,justifyContent:'center'}}>Post Notice →</button>
+            <button type="button" onClick={()=>setShowAdd(false)} className="btn btn-ghost" style={{flex:1,justifyContent:'center'}} disabled={posting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" style={{flex:2,justifyContent:'center'}} disabled={posting}>
+              {posting ? 'Posting…' : 'Post Notice →'}
+            </button>
           </div>
         </form>
       </Modal>
@@ -1102,7 +1183,7 @@ function AnnouncementsSection({school}:{school:any}) {
           <div className="font-display fw-700 text-white" style={{fontSize:18}}>School Announcements</div>
           <div className="text-muted text-sm">Notices visible to parents and students</div>
         </div>
-        <button onClick={()=>setShowAdd(true)} className="btn btn-primary btn-sm">+ New Notice</button>
+        <button onClick={()=>setShowAdd(true)} className="btn btn-primary btn-sm" disabled={posting}>+ New Notice</button>
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         {loading && (
@@ -1122,7 +1203,14 @@ function AnnouncementsSection({school}:{school:any}) {
                 <h3 style={{fontFamily:'var(--font-display)',fontWeight:700,color:'var(--white)',fontSize:16,marginBottom:8}}>{n.title}</h3>
                 <p style={{fontSize:14,color:'var(--muted)',lineHeight:1.7}}>{n.body}</p>
               </div>
-              <button onClick={()=>deleteNotice(n.id)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--danger)',fontSize:18,flexShrink:0,padding:4}} title="Delete notice">🗑️</button>
+              <button
+                onClick={()=>deleteNotice(n.id)}
+                disabled={deletingId === n.id}
+                style={{background:'none',border:'none',cursor:deletingId === n.id ? 'not-allowed' : 'pointer',color:'var(--danger)',fontSize:18,flexShrink:0,padding:4,opacity:deletingId === n.id ? 0.55 : 1}}
+                title={deletingId === n.id ? 'Deleting…' : 'Delete notice'}
+              >
+                {deletingId === n.id ? '…' : '🗑️'}
+              </button>
             </div>
           </div>
         ))}
@@ -1403,10 +1491,13 @@ function BulkUpload({ school }: { school: any }) {
     const joined = [y, t].filter(Boolean).join(' ').trim()
     return joined || '2025/2026 Term 2'
   })()
-  const [defaults, setDefaults] = useState({ className: 'SS3A', track: '', termLabel: resolvedTermLabel })
+  const [defaults, setDefaults] = useState({ className: '', track: '', termLabel: resolvedTermLabel })
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [progress, setProgress] = useState<{ total: number; done: number; succeeded: number; failed: number } | null>(null)
+  const [classOptions, setClassOptions] = useState<string[]>([])
+  const [classTrackMap, setClassTrackMap] = useState<Record<string, string>>({})
+  const [loadingClasses, setLoadingClasses] = useState(false)
   useEffect(() => {
     if (!trackOptions.length) return
     if (!trackOptions.some((t) => t.code === defaults.track)) {
@@ -1416,6 +1507,47 @@ function BulkUpload({ school }: { school: any }) {
   useEffect(() => {
     setDefaults((prev) => ({ ...prev, termLabel: resolvedTermLabel }))
   }, [resolvedTermLabel])
+
+  useEffect(() => {
+    const load = async () => {
+      if (!school?.id) {
+        setClassOptions([])
+        return
+      }
+      setLoadingClasses(true)
+      try {
+        const rows = await schoolClassesApi.all(school.id).catch(() => [])
+        const list = Array.isArray(rows) ? rows : []
+        const opts = Array.from(new Set(list.map((r: any) => String(r?.className || '').trim()).filter(Boolean))).sort()
+        const map = list.reduce((acc: Record<string, string>, c: any) => {
+          if (c?.className && c?.track) acc[c.className] = c.track
+          return acc
+        }, {})
+        setClassOptions(opts)
+        setClassTrackMap(map)
+        if (!defaults.className && opts.length) {
+          const first = opts[0]
+          setDefaults((prev) => ({ ...prev, className: first, track: map[first] || prev.track }))
+        }
+      } catch {
+        setClassOptions([])
+        setClassTrackMap({})
+      } finally {
+        setLoadingClasses(false)
+      }
+    }
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [school?.id])
+
+  useEffect(() => {
+    const mapped = classTrackMap[defaults.className]
+    if (mapped && mapped !== defaults.track) {
+      setDefaults((prev) => ({ ...prev, track: mapped }))
+    }
+  }, [defaults.className, classTrackMap, defaults.track])
+
+  const trackMismatch = Boolean(defaults.className && classTrackMap[defaults.className] && classTrackMap[defaults.className] !== defaults.track)
 
   const run = async (e: React.FormEvent) => {
     e.preventDefault(); setLoading(true); setResult(null); setProgress(null)
@@ -1474,16 +1606,31 @@ function BulkUpload({ school }: { school: any }) {
           <form onSubmit={run} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
               <div><label className="form-label">Default Class</label>
-                <select className="form-input" value={defaults.className} onChange={e => setDefaults({ ...defaults, className: e.target.value })} style={{ appearance: 'none' }}>
-                  {['JSS1A','JSS1B','JSS2A','SS1A','SS1B','SS2A','SS3A','SS3B'].map(c => <option key={c}>{c}</option>)}
+                <select className="form-input" value={defaults.className} onChange={e => {
+                  const className = e.target.value
+                  const track = classTrackMap[className]
+                  setDefaults((prev) => ({ ...prev, className, ...(track ? { track } : {}) }))
+                }} style={{ appearance: 'none' }}>
+                  {classOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {classOptions.length === 0 && <option value="">{loadingClasses ? 'Loading classes…' : 'No classes found'}</option>}
                 </select>
               </div>
               <div><label className="form-label">Default Track</label>
-                <select className="form-input" value={defaults.track} onChange={e => setDefaults({ ...defaults, track: e.target.value })} style={{ appearance: 'none' }}>
+                <select className="form-input" value={defaults.track} onChange={e => setDefaults({ ...defaults, track: e.target.value })} style={{ appearance: 'none' }} disabled={Boolean(classTrackMap[defaults.className])}>
                   {(trackOptions.length ? trackOptions : [{ code: 'TRACK_1', label: 'Track 1' }, { code: 'TRACK_2', label: 'Track 2' }, { code: 'TRACK_3', label: 'Track 3' }]).map((t) => (
                     <option key={t.code} value={t.code}>{t.label}</option>
                   ))}
                 </select>
+                {classTrackMap[defaults.className] && (
+                  <div className="text-muted text-xs" style={{ marginTop: 6 }}>
+                    Track is set by your class registry for {defaults.className}.
+                  </div>
+                )}
+                {trackMismatch && (
+                  <div className="text-xs" style={{ marginTop: 6, color: '#FCD34D' }}>
+                    Selected track does not match the registered track for this class.
+                  </div>
+                )}
               </div>
               <div><label className="form-label">Term Label</label><input className="form-input" value={defaults.termLabel} onChange={e => setDefaults({ ...defaults, termLabel: e.target.value })} /></div>
             </div>
@@ -1594,67 +1741,6 @@ function AdminPayments({ school }: { school: any }) {
   )
 }
 
-// ── CERTIFICATES MANAGEMENT (admin) ────────────────────────────────────────
-function AdminCertificates({ school }: { school: any }) {
-  const [certs, setCerts] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [issuing, setIssuing] = useState<string | null>(null)
-  const [eligible, setEligible] = useState<any[]>([])
-  const [loadingEligible, setLoadingEligible] = useState(true)
-
-  useEffect(() => {
-    if (!school?.id) return
-    certificatesApi.bySchool(school.id).then(d => setCerts(Array.isArray(d) ? d : [])).catch(() => setCerts([])).finally(() => setLoading(false))
-    // Get top students with completed modules
-    schoolsApi.topStudents().then(d => setEligible(Array.isArray(d) ? d.filter((s: any) => s.averageScore >= 50) : [])).catch(() => setEligible([])).finally(() => setLoadingEligible(false))
-  }, [school?.id])
-
-  const issue = async (studentId: string, track: string) => {
-    setIssuing(studentId)
-    try { const c = await certificatesApi.issue(studentId, track); setCerts(prev => [c, ...prev]); notify.success('Certificate issued! ✓') } catch (e: any) { notify.fromError(e) }
-    setIssuing(null)
-  }
-
-  return (
-    <div>
-      <div className="flex-between mb-20"><div><h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Certificates</h3><div className="text-muted text-sm">Issue and manage student completion certificates</div></div></div>
-      <div className="content-grid">
-        <div className="card">
-          <div className="font-display fw-600 text-white mb-16" style={{ fontSize: 15 }}>Eligible Students</div>
-          {loadingEligible && <p className="text-muted text-sm">Loading…</p>}
-          {eligible.map((s: any, i: number) => {
-            const name = `${s.user?.firstName} ${s.user?.lastName}`
-            const hasCert = certs.some((c: any) => c.studentId === s.id)
-            return (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border2)' }}>
-                <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: 'var(--white)' }}>{name}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{s.averageScore}% avg · {s.track?.replace('TRACK_','Track ')}</div></div>
-                {hasCert ? <span className="badge badge-success">✓ Issued</span> : <button onClick={() => issue(s.id, s.track)} className="btn btn-primary btn-sm" style={{ fontSize: 11 }} disabled={issuing === s.id}>{issuing === s.id ? '…' : 'Issue Cert'}</button>}
-              </div>
-            )
-          })}
-          {!loadingEligible && eligible.length === 0 && <p className="text-muted text-sm">No eligible students yet.</p>}
-        </div>
-        <div className="card">
-          <div className="font-display fw-600 text-white mb-16" style={{ fontSize: 15 }}>Issued Certificates</div>
-          {loading && <p className="text-muted text-sm">Loading…</p>}
-          {certs.map((c: any) => (
-            <div key={c.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <div style={{ fontWeight: 600, color: 'var(--white)', fontSize: 13 }}>{c.student?.user?.firstName} {c.student?.user?.lastName}</div>
-                <span className={`badge badge-${c.isValid ? 'success' : 'danger'}`}>{c.isValid ? 'Valid' : 'Revoked'}</span>
-              </div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--muted)' }}>{c.serialNumber}</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{c.track?.replace('TRACK_','Track ')} · {c.score}% · {new Date(c.issueDate).toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
-            </div>
-          ))}
-          {!loading && certs.length === 0 && <p className="text-muted text-sm">No certificates issued yet.</p>}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-
 function AdminDashboardInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -1709,9 +1795,12 @@ function AdminDashboardInner() {
   const titles: Record<string,string> = {
     overview:'School Overview',students:'Students',classes:'Classes',attendance:'Attendance',
     results:'Results & Exams',payments:'Payments & Fees',tutors:'Tutors',
-    payroll:'Tutor Payroll',announcements:'Announcements',certificates:'Certificates',
+    payroll:'Tutor Payroll',announcements:'Announcements',
     reports:'Reports',settings:'Settings', 'bulk-upload':'Bulk Upload',
     'class-insights':'Class performance',
+    'tutor-delivery':'Tutor delivery',
+    terms:'Academic terms',
+    'audit-log':'Audit log',
     'school-profile':'School profile',
   }
 
@@ -1749,8 +1838,14 @@ function AdminDashboardInner() {
       )
       case 'payments': return <AdminPayments school={school}/>
       case 'announcements': return <AnnouncementsSection school={school}/>
-      case 'certificates': return <AdminCertificates school={school}/>
       case 'bulk-upload': return <BulkUpload school={school}/>
+      case 'tutor-delivery': return school?.id ? <TutorDeliveryPanel schoolId={school.id} /> : <p className="text-muted text-sm">Loading school…</p>
+      case 'terms': return school?.id ? (
+        <SchoolTermsPanel schoolId={school.id} school={school} onSchoolUpdated={setSchool} />
+      ) : (
+        <p className="text-muted text-sm">Loading school…</p>
+      )
+      case 'audit-log': return school?.id ? <AcademicAuditPanel schoolId={school.id} /> : <p className="text-muted text-sm">Loading school…</p>
       case 'reports': return <AdminReportsSection school={school}/>
       case 'school-profile': return <SchoolProfileView school={school} />
       case 'settings': return <SettingsSection school={school} onUpdated={setSchool}/>
