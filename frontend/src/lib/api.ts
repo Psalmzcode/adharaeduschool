@@ -328,6 +328,62 @@ export const curriculumApi = {
   updateLesson: (id: string, data: any) =>
     req('PATCH', `/curriculum/lessons/${encodeURIComponent(id)}`, data),
   deleteLesson: (id: string) => req('DELETE', `/curriculum/lessons/${encodeURIComponent(id)}`),
+  lessonActivities: (moduleId: string, schoolId: string, className: string) => {
+    const p = new URLSearchParams({ moduleId, schoolId, className })
+    return req('GET', `/curriculum/lesson-activities?${p}`)
+  },
+  lessonFormativeSummary: (schoolId: string, className: string, moduleId: string) => {
+    const p = new URLSearchParams({ schoolId, className, moduleId })
+    return req('GET', `/curriculum/lesson-formative-summary?${p}`)
+  },
+  upsertLessonMicroQuiz: (lessonId: string, data: any) =>
+    req('POST', `/curriculum/lessons/${encodeURIComponent(lessonId)}/micro-quiz`, data),
+  disableLessonMicroQuiz: (quizId: string) =>
+    req('DELETE', `/curriculum/micro-quiz/${encodeURIComponent(quizId)}`),
+  upsertLessonAssignment: (lessonId: string, data: any) =>
+    req('POST', `/curriculum/lessons/${encodeURIComponent(lessonId)}/lesson-assignment`, data),
+  submitLessonMicroQuiz: (quizId: string, answers: number[]) =>
+    req('POST', `/curriculum/micro-quiz/${encodeURIComponent(quizId)}/submit`, { answers }),
+}
+
+// ─── TYPING LAB ───────────────────────────────────────────────
+export const typingApi = {
+  drills: () => req('GET', '/typing/drills'),
+  access: () => req('GET', '/typing/access'),
+  mySummary: (moduleId?: string) => {
+    const p = moduleId ? new URLSearchParams({ moduleId }) : ''
+    return req('GET', `/typing/my-summary${p ? `?${p}` : ''}`)
+  },
+  feedback: (moduleId?: string) => {
+    const p = moduleId ? new URLSearchParams({ moduleId }) : ''
+    return req('GET', `/typing/feedback${p ? `?${p}` : ''}`)
+  },
+  saveAttempt: (data: { moduleId: string; drillKey: string; typed: string; elapsedSec: number }) =>
+    req('POST', '/typing/attempts', data),
+  classSummary: (schoolId: string, className: string, moduleId?: string) => {
+    const p = new URLSearchParams({ schoolId, className })
+    if (moduleId) p.set('moduleId', moduleId)
+    return req('GET', `/typing/class-summary?${p}`)
+  },
+}
+
+export const leaderboardsApi = {
+  filters: () => req('GET', '/leaderboards/filters'),
+  get: (params: {
+    track?: string
+    scope?: 'class' | 'track'
+    schoolId?: string
+    className?: string
+    crossSchool?: boolean
+  }) => {
+    const p = new URLSearchParams()
+    if (params.track) p.set('track', params.track)
+    if (params.scope) p.set('scope', params.scope)
+    if (params.schoolId) p.set('schoolId', params.schoolId)
+    if (params.className) p.set('className', params.className)
+    if (params.crossSchool) p.set('crossSchool', 'true')
+    return req('GET', `/leaderboards?${p}`)
+  },
 }
 
 // ─── ATTENDANCE ─────────────────────────────────────────────
@@ -585,6 +641,11 @@ export const assignmentsApi = {
   submissions: (assignmentId: string) => req('GET', `/assignments/${assignmentId}/submissions`),
   grade: (submissionId: string, score: number, feedback: string) =>
     req('PATCH', `/assignments/submissions/${submissionId}/grade`, { score, feedback }),
+  aiGrade: (submissionId: string) => req('POST', `/assignments/submissions/${submissionId}/ai-grade`),
+  gradingPreview: (submissionId: string) => req('GET', `/assignments/submissions/${submissionId}/grading-preview`),
+  approveAiGrade: (submissionId: string, data?: { score?: number; feedback?: string }) =>
+    req('PATCH', `/assignments/submissions/${submissionId}/approve-ai-grade`, data || {}),
+  aiReviewQueue: () => req('GET', '/assignments/ai-review-queue'),
   update: (id: string, data: any) => req('PATCH', `/assignments/${id}`, data),
   delete: (id: string) => {
     const token = getToken()
@@ -604,11 +665,17 @@ export const practicalsApi = {
   grade: (submissionId: string, data: { totalScore: number; feedback?: string; scoreBreakdown?: any }) =>
     req('PATCH', `/practicals/submissions/${submissionId}/grade`, data),
   aiGrade: (submissionId: string) => req('POST', `/practicals/submissions/${submissionId}/ai-grade`),
+  gradingPreview: (submissionId: string) => req('GET', `/practicals/submissions/${submissionId}/grading-preview`),
   approveAiGrade: (submissionId: string, data?: { totalScore?: number; feedback?: string }) =>
     req('PATCH', `/practicals/submissions/${submissionId}/approve-ai-grade`, data || {}),
   aiReviewQueue: () => req('GET', '/practicals/ai-review-queue'),
   bulkGrade: (taskId: string, data: { submissionIds?: string[]; totalScore: number; feedback?: string; scoreBreakdown?: any }) =>
     req('PATCH', `/practicals/tasks/${taskId}/bulk-grade`, data),
+}
+
+// ─── EVIDENCE GRADING (admin) ────────────────────────────────
+export const evidenceGradingApi = {
+  oversight: () => req('GET', '/evidence-grading/admin/oversight'),
 }
 
 // ─── PAYSTACK ────────────────────────────────────────────────

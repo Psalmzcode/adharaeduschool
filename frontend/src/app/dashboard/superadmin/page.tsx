@@ -7,6 +7,8 @@ import { ClassPerformancePanel } from '@/components/ClassPerformancePanel'
 import { authApi, schoolsApi, tutorsApi, paymentsApi, reportsApi, cbtApi, payrollApi, tracksApi, practicalsApi, modulesApi, schoolClassesApi, curriculumApi, usersApi, uploadsApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { SACertificates } from './extras'
+import { GradingOversightPanel } from '@/components/grading/GradingOversightPanel'
+import { LeaderboardPage } from '@/components/leaderboard/LeaderboardPage'
 
 /** Same as student `useLoad`: do not merge `def` into `data` while loading (avoids fake zeros / empty tables). */
 function useData<T>(queryKey: unknown[], fn: () => Promise<T>, def: T, enabled = true) {
@@ -2919,9 +2921,10 @@ function SuperAdminDashboardInner({ mode = 'platform' }: { mode?: 'platform' | '
   const titles: Record<string, string> = {
     overview: 'Platform Overview', schools: 'Registered Schools', approvals: 'Pending Approvals',
     tutors: 'All Tutors', payments: 'Payments', reports: 'Weekly Tutor Reports',
-    assessments: 'Assessment Vetting', cbt: 'Modules', tracks: 'Program Tracks', settings: 'Platform Settings', payroll: 'Tutor Payroll', certificates: 'All Certificates',
+    assessments: 'Assessment Vetting', 'ai-grading': 'AI Grading Oversight', cbt: 'Modules', tracks: 'Program Tracks', settings: 'Platform Settings', payroll: 'Tutor Payroll', certificates: 'All Certificates',
     'session-logs': 'Tutor session logs',
     'class-insights': 'Class performance',
+    leaderboard: 'Leaderboard',
   }
 
   if (loading) return (
@@ -2938,12 +2941,14 @@ function SuperAdminDashboardInner({ mode = 'platform' }: { mode?: 'platform' | '
       case 'payments': return <SAPayments />
       case 'reports': return <SAReports />
       case 'assessments': return <SAAssessments />
+      case 'ai-grading': return <GradingOversightPanel />
       case 'cbt': return <SAModules contentOnly={isCurriculumMode} />
       case 'tracks': return <SATracks readOnly={isCurriculumMode} />
       case 'payroll': return <SAPayroll />
       case 'certificates': return <SACertificates />
       case 'session-logs': return <SASessionSchools />
       case 'class-insights': return <SAClassInsights />
+      case 'leaderboard': return <LeaderboardPage role="superadmin" />
       case 'settings': return isCurriculumMode ? <CLAccountSettings /> : <SASettings />
       default: return isCurriculumMode ? <SAModules contentOnly /> : <SAOverview onSection={setSection} />
     }

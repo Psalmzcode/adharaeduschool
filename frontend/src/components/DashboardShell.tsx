@@ -1,6 +1,8 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { NavIcon } from '@/components/learning/NavIcon'
+import { applyTheme, readStoredTheme, THEME_STORAGE_KEY } from '@/lib/theme'
 
 interface NavItem { icon: string; label: string; section: string; badge?: string; badgeStyle?: any }
 interface Props {
@@ -36,6 +38,7 @@ const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;u
         {icon:'📤',label:'Bulk Upload',section:'bulk-upload'},
         {icon:'📋',label:'Reports',section:'reports'},
         {icon:'📈',label:'Class performance',section:'class-insights'},
+        {icon:'🏆',label:'Leaderboard',section:'leaderboard'},
         {icon:'📆',label:'Terms',section:'terms'},
       ]},
       {label:'System', items:[
@@ -54,6 +57,7 @@ const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;u
         {icon:'🏫',label:'Classes',section:'tutor-classes'},
         {icon:'📅',label:'Attendance',section:'tutor-attendance'},
         {icon:'📝',label:'Mark Results',section:'tutor-results'},
+        {icon:'🏆',label:'Leaderboard',section:'tutor-leaderboard'},
         {icon:'🧾',label:'Assignments',section:'tutor-assignments'},
         {icon:'🧪',label:'Practicals',section:'tutor-practicals'},
         {icon:'📚',label:'Lesson Plans',section:'tutor-lessons'},
@@ -79,6 +83,7 @@ const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;u
         {icon:'📝',label:'Assignments',section:'student-assignments',badge:'2'},
         {icon:'🧪',label:'Practicals',section:'student-practicals'},
         {icon:'📊',label:'My Results',section:'student-results'},
+        {icon:'🏆',label:'Leaderboard',section:'student-leaderboard'},
         {icon:'📅',label:'Attendance',section:'student-attendance'},
         {icon:'🎓',label:'My Certificates',section:'student-certificates'},
       ]},
@@ -134,9 +139,11 @@ const NAV: Record<string, {groups:{label:string;items:NavItem[]}[];user:string;u
       ]},
       {label:'Content', items:[
         {icon:'📝',label:'Assessment Vetting',section:'assessments',badgeStyle:{background:'rgba(245,158,11,0.22)',color:'#FCD34D'}},
+        {icon:'🤖',label:'AI Grading',section:'ai-grading'},
         {icon:'🖥️',label:'Modules',section:'cbt'},
         {icon:'🧭',label:'Program Tracks',section:'tracks'},
         {icon:'📈',label:'Class performance',section:'class-insights'},
+        {icon:'🏆',label:'Leaderboard',section:'leaderboard'},
       ]},
       {label:'System', items:[
         {icon:'⚙️',label:'Settings',section:'settings'},
@@ -155,13 +162,21 @@ export function DashboardShell({ role, title, subtitle, section, onSectionChange
   const nav = NAV[role] || NAV.superadmin
 
   useEffect(() => {
-    const saved = localStorage.getItem('adharaTheme')
-    if (saved === 'light') { setTheme('light'); document.body.classList.add('light-mode') }
+    const stored = readStoredTheme()
+    setTheme(stored)
+    applyTheme(stored)
   }, [])
 
   const toggleTheme = () => {
-    if (theme === 'dark') { setTheme('light'); document.body.classList.add('light-mode'); localStorage.setItem('adharaTheme','light') }
-    else { setTheme('dark'); document.body.classList.remove('light-mode'); localStorage.setItem('adharaTheme','dark') }
+    if (theme === 'dark') {
+      setTheme('light')
+      applyTheme('light')
+      localStorage.setItem(THEME_STORAGE_KEY, 'light')
+    } else {
+      setTheme('dark')
+      applyTheme('dark')
+      localStorage.setItem(THEME_STORAGE_KEY, 'dark')
+    }
   }
 
   const logout = () => { localStorage.removeItem('adhara_token'); localStorage.removeItem('adhara_user'); router.push('/auth/login') }
@@ -222,7 +237,7 @@ export function DashboardShell({ role, title, subtitle, section, onSectionChange
                 return (
                   <a key={item.section+item.label} className={`sidebar-link${section===item.section?' active':''}`}
                     onClick={()=>{ onSectionChange(item.section); setSidebarOpen(false) }} style={{cursor:'pointer'}}>
-                    <span className="link-icon">{item.icon}</span>
+                    <NavIcon section={item.section} fallbackEmoji={item.icon} active={section === item.section} />
                     {item.label}
                     {resolvedBadge !== null && resolvedBadge !== undefined && String(resolvedBadge) !== '' && <span className="link-badge" style={item.badgeStyle||{}}>{resolvedBadge}</span>}
                   </a>

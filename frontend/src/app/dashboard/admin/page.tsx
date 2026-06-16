@@ -12,6 +12,7 @@ import { AcademicAuditPanel } from '@/components/AcademicAuditPanel'
 import { SchoolProfileView } from '@/components/school/SchoolProfileView'
 import { schoolsApi, studentsApi, noticesApi, examsApi, attendanceApi, bulkUploadApi, paymentsApi, paystackApi, tutorsApi, schoolClassesApi, reportsApi, tracksApi, practicalsApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
+import { LeaderboardPage } from '@/components/leaderboard/LeaderboardPage'
 
 // ── tiny reusable pieces ──────────────────────────────────────────────────
 function StatCard({icon,value,label,trend,trendUp,glowColor='var(--gold)'}:{icon:string,value:any,label:string,trend?:string,trendUp?:boolean,glowColor?:string}) {
@@ -1802,6 +1803,7 @@ function AdminDashboardInner() {
     terms:'Academic terms',
     'audit-log':'Audit log',
     'school-profile':'School profile',
+    leaderboard:'Leaderboard',
   }
 
   const pendingPayments = Array.isArray(adminPayments) ? adminPayments.filter((p: any) => !p.isPaid).length : 0
@@ -1920,6 +1922,7 @@ function AdminDashboardInner() {
         </div>
       )
       case 'results': return <AdminResultsSection school={school}/>
+      case 'leaderboard': return <LeaderboardPage role="admin" />
       case 'class-insights': return (
         <div>
           <div className="font-display fw-700 text-white mb-8" style={{ fontSize: 18 }}>Class performance</div>

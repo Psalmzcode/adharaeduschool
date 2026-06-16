@@ -3,12 +3,26 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
-import { studentsApi, modulesApi, attendanceApi, notifApi, messagesApi, certificatesApi, assignmentsApi, examSchedulesApi, noticesApi, practicalsApi, lessonsApi, uploadsApi, authApi, curriculumApi } from '@/lib/api'
+import { studentsApi, modulesApi, attendanceApi, notifApi, messagesApi, certificatesApi, assignmentsApi, examSchedulesApi, noticesApi, practicalsApi, lessonsApi, uploadsApi, authApi, curriculumApi, typingApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { formatTrack } from '@/lib/schoolProfileLabels'
+import {
+  ModuleHeroStrip,
+  LessonCard,
+  LessonTimeline,
+  LessonStudentActivities,
+  HandoutAccordion,
+  LearningSkeleton,
+  ModuleMaterialsPanel,
+  TutorLessonMaterials,
+  LearningMaterialsHint,
+  TypingLab,
+} from '@/components/learning'
+import { SubmissionUploadHints } from '@/components/grading/SubmissionUploadHints'
+import { StudentRubricBreakdown } from '@/components/grading/StudentRubricBreakdown'
+import { LeaderboardPage } from '@/components/leaderboard/LeaderboardPage'
 
 /* ── helpers ── */
-function initials(name: string) { return name.split(' ').filter(Boolean).map(n => n[0]).join('').slice(0, 2).toUpperCase() }
 const COLORS = ['rgba(212,168,83,0.2)', 'rgba(26,127,212,0.2)', 'rgba(139,92,246,0.2)', 'rgba(34,197,94,0.2)', 'rgba(239,68,68,0.2)', 'rgba(245,158,11,0.2)']
 const TCOLORS = ['var(--gold)', 'var(--teal2)', '#A78BFA', '#4ADE80', '#F87171', '#FCD34D']
 function sc(i: number) { return { c: COLORS[i % COLORS.length], tc: TCOLORS[i % TCOLORS.length] } }
@@ -118,13 +132,16 @@ function StudentHome({ student, stats, progress, onSection }: any) {
       <div className="card">
         <div className="flex-between mb-20"><div><div className="font-display fw-700 text-white" style={{ fontSize: 16 }}>Module Progress</div><div className="text-muted text-sm mt-4">{student?.track?.replace('TRACK_', 'Track ')}</div></div><button onClick={() => onSection('student-modules')} className="btn btn-ghost btn-sm">View All</button></div>
         <div className="student-progress-grid">
-          {progress.slice(0, 6).map((p: any) => (
-            <div key={p.id} className="module-progress-card" style={{ borderColor: p.status === 'COMPLETED' ? 'rgba(34,197,94,0.3)' : p.status === 'IN_PROGRESS' ? 'rgba(212,168,83,0.4)' : 'var(--border2)', background: p.status === 'IN_PROGRESS' ? 'rgba(212,168,83,0.05)' : '' }}>
-              <div className="flex-between mb-8"><h4 style={{ fontSize: 13 }}>M{p.module?.number}: {p.module?.title}</h4><span className={`badge badge-${p.status === 'COMPLETED' ? 'success' : 'warning'}`}>{p.status === 'COMPLETED' ? '✓' : p.status === 'IN_PROGRESS' ? 'Active' : '🔒'}</span></div>
+          {progress.slice(0, 6).map((p: any) => {
+            const st = moduleStatusUi(p.status)
+            return (
+            <div key={p.id} className="module-progress-card" style={{ borderColor: st.border, background: p.status === 'IN_PROGRESS' ? 'rgba(212,168,83,0.05)' : p.status === 'FAILED' ? 'rgba(239,68,68,0.04)' : '' }}>
+              <div className="flex-between mb-8"><h4 style={{ fontSize: 13 }}>M{p.module?.number}: {p.module?.title}</h4><span className={`badge badge-${st.badge}`}>{st.label}</span></div>
               <div className="progress-bar-label"><span style={{ fontSize: 11 }}>Score</span><strong style={{ fontSize: 12, color: p.score ? (p.score >= 70 ? 'var(--success)' : 'var(--warning)') : 'var(--muted)' }}>{p.score ? `${p.score}%` : '—'}</strong></div>
-              <div className="progress-bar"><div className="progress-fill" style={{ width: p.status === 'COMPLETED' ? '100%' : p.status === 'IN_PROGRESS' ? '40%' : '0%' }}></div></div>
+              <div className="progress-bar"><div className="progress-fill" style={{ width: st.fill }}></div></div>
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -143,130 +160,180 @@ function fileHref(f: any) {
   return f?.url || f?.fileUrl || '#'
 }
 
+function moduleStatusUi(status: string) {
+  switch (status) {
+    case 'COMPLETED':
+      return { label: '✓ Done', badge: 'success', border: 'rgba(34,197,94,0.3)', fill: '100%' }
+    case 'IN_PROGRESS':
+      return { label: 'In Progress', badge: 'warning', border: 'rgba(212,168,83,0.4)', fill: '40%' }
+    case 'FAILED':
+      return { label: 'Retake needed', badge: 'danger', border: 'rgba(239,68,68,0.35)', fill: '100%' }
+    default:
+      return { label: '🔒 Locked', badge: 'warning', border: 'var(--border2)', fill: '0%' }
+  }
+}
+
 function StudentModules({ progress, student }: { progress: any[]; student: any }) {
+  const queryClient = useQueryClient()
   const { data: journey, loading: journeyLoading } = useLoad(
     ['student', 'lesson-journey', student?.id],
     () => curriculumApi.myLessonJourney(),
     null as any,
     !!student?.id,
   )
+  const { data: typingAccess, loading: typingAccessLoading } = useLoad(
+    ['student', 'typing-access', student?.id],
+    () => typingApi.access(),
+    null as any,
+    !!student?.id,
+  )
+  const reloadJourney = () => {
+    queryClient.invalidateQueries({ queryKey: ['student', 'lesson-journey', student?.id] })
+  }
   const j = journey && typeof journey === 'object' ? journey : null
   const lessons = Array.isArray(j?.lessons) ? j.lessons : []
   const handouts = Array.isArray(j?.tutorHandouts) ? j.tutorHandouts : []
+  const moduleFiles = Array.isArray(j?.moduleFiles) ? j.moduleFiles : []
+  const tutorLessonMaterials = Array.isArray(j?.tutorLessonMaterials) ? j.tutorLessonMaterials : []
   const lastFiles = Array.isArray(j?.lastDeliveredLesson?.files) ? j.lastDeliveredLesson.files : []
   const nextFiles = Array.isArray(j?.nextLesson?.files) ? j.nextLesson.files : []
-
-  const renderFiles = (files: any[], label: string) => {
-    if (!files.length) return null
-    return (
-      <div style={{ marginTop: 10 }}>
-        <div className="text-xs text-muted mb-6">{label}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {files.map((f: any, i: number) => (
-            <a key={`${f.id || i}-${fileHref(f)}`} href={fileHref(f)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ justifyContent: 'flex-start' }}>
-              ⬇ {f.fileName || f.displayName || `File ${i + 1}`}
-            </a>
-          ))}
-        </div>
-      </div>
-    )
-  }
+  const activeLessonId = j?.lastDeliveredLesson?.id ?? j?.nextLesson?.id ?? null
+  const hasAnyMaterials =
+    lessons.length > 0 ||
+    handouts.length > 0 ||
+    moduleFiles.length > 0 ||
+    tutorLessonMaterials.some((b: any) => Array.isArray(b?.files) && b.files.length > 0) ||
+    !!j?.lastDeliveredLesson ||
+    !!j?.nextLesson
 
   return (
-    <div>
+    <div className="learning-page">
       <h3 className="font-display fw-700 text-white mb-20" style={{ fontSize: 20 }}>My Modules & Lessons</h3>
-      {journeyLoading && <p className="text-muted text-sm mb-12">Loading lesson journey…</p>}
 
-      {j?.activeModule && (
-        <div className="card mb-20" style={{ borderColor: 'rgba(212,168,83,0.35)' }}>
-          <div className="font-display fw-600 text-white mb-8" style={{ fontSize: 15 }}>
-            Active module · Module {j.activeModule.number}: {j.activeModule.title}
-          </div>
-          {j.moduleProgress && (
-            <div className="text-muted text-sm mb-10">
-              Status: <span style={{ color: 'var(--white)' }}>{j.moduleProgress.status}</span>
-              {j.moduleProgress.score != null && <span> · Score {j.moduleProgress.score}%</span>}
-            </div>
-          )}
-          {j.lastDeliveredLesson && (
-            <div style={{ marginBottom: 14, padding: '12px 14px', background: 'rgba(34,197,94,0.06)', borderRadius: 10, border: '1px solid rgba(34,197,94,0.2)' }}>
-              <div className="text-xs text-muted mb-4">Last lesson delivered in class</div>
-              <div style={{ color: 'var(--white)', fontWeight: 600 }}>
-                Lesson {j.lastDeliveredLesson.position}: {j.lastDeliveredLesson.title}
-              </div>
-              {j.lastDeliveredLesson.objective && (
-                <p className="text-sm text-muted" style={{ margin: '8px 0 0' }}>{j.lastDeliveredLesson.objective}</p>
+      {journeyLoading && <LearningSkeleton />}
+
+      {!journeyLoading && j?.activeModule && (
+        <>
+          <ModuleHeroStrip
+            moduleNumber={j.activeModule.number}
+            title={j.activeModule.title}
+            status={j.moduleProgress?.status}
+            score={j.moduleProgress?.score}
+          />
+
+          {(j.lastDeliveredLesson || (j.nextLesson && j.nextLesson.id !== j.lastDeliveredLesson?.id)) && (
+            <div className="learning-now-next">
+              {j.lastDeliveredLesson && (
+                <LessonCard
+                  label="Last delivered in class"
+                  title={`Lesson ${j.lastDeliveredLesson.position}: ${j.lastDeliveredLesson.title}`}
+                  subtitle={j.lastDeliveredLesson.objective || undefined}
+                  variant="delivered"
+                  files={lastFiles}
+                  fileHref={fileHref}
+                />
               )}
-              {renderFiles(lastFiles, 'Class materials')}
+              {j.nextLesson && j.nextLesson.id !== j.lastDeliveredLesson?.id && (
+                <LessonCard
+                  label="Up next"
+                  title={`Lesson ${j.nextLesson.position}: ${j.nextLesson.title}`}
+                  variant="next"
+                  files={nextFiles}
+                  fileHref={fileHref}
+                />
+              )}
             </div>
           )}
-          {j.nextLesson && j.nextLesson.id !== j.lastDeliveredLesson?.id && (
-            <div style={{ padding: '12px 14px', background: 'rgba(26,127,212,0.06)', borderRadius: 10, border: '1px solid rgba(26,127,212,0.25)' }}>
-              <div className="text-xs text-muted mb-4">Up next in class</div>
-              <div style={{ color: 'var(--white)', fontWeight: 600 }}>
-                Lesson {j.nextLesson.position}: {j.nextLesson.title}
-              </div>
-              {renderFiles(nextFiles, 'Preview materials')}
-            </div>
-          )}
-        </div>
+        </>
       )}
 
-      {lessons.length > 0 && (
-        <div className="card mb-20">
-          <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Lesson checklist</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {lessons.map((L: any) => (
-              <div key={L.id} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border2)', background: L.completed ? 'rgba(34,197,94,0.04)' : 'transparent' }}>
-                <span style={{ fontSize: 18, lineHeight: 1 }}>{L.completed ? '✓' : '○'}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ color: 'var(--white)', fontWeight: 600 }}>Lesson {L.position}: {L.title}</div>
-                  {L.objective && <div className="text-sm text-muted" style={{ marginTop: 4 }}>{L.objective}</div>}
-                  {Array.isArray(L.files) && L.files.length > 0 && (
-                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {L.files.slice(0, 3).map((f: any, i: number) => (
-                        <a key={i} href={fileHref(f)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: '4px 8px' }}>
-                          ⬇ {f.fileName || 'File'}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
+      {!journeyLoading && j?.activeModule && moduleFiles.length > 0 && (
+        <ModuleMaterialsPanel files={moduleFiles} fileHref={fileHref} />
+      )}
+
+      {!journeyLoading && tutorLessonMaterials.length > 0 && (
+        <TutorLessonMaterials bundles={tutorLessonMaterials} fileHref={fileHref} />
+      )}
+
+      {!journeyLoading && j?.activeModule && !hasAnyMaterials && (
+        <LearningMaterialsHint />
+      )}
+
+      {!journeyLoading && j?.lessonFormativeSummary?.assignedCount > 0 && (
+        <div className="card mb-20" style={{ padding: '14px 16px' }}>
+          <div className="text-xs text-muted">
+            Lesson practice average{' '}
+            <strong className="text-white">
+              {j.lessonFormativeSummary.averageScore != null ? `${j.lessonFormativeSummary.averageScore}%` : '—'}
+            </strong>
+            {' '}({j.lessonFormativeSummary.attemptedCount}/{j.lessonFormativeSummary.assignedCount} items attempted)
+            <span className="text-muted"> · formative only, does not gate module advance</span>
           </div>
         </div>
       )}
 
-      {handouts.length > 0 && (
+      {!journeyLoading && !typingAccessLoading && typingAccess?.unlocked && typingAccess?.moduleId && (
+        <TypingLab moduleId={typingAccess.moduleId} moduleTitle={typingAccess.moduleTitle} />
+      )}
+
+      {!journeyLoading && lessons.length > 0 && (
+        <div className="card mb-20">
+          <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Lesson path</div>
+          <LessonTimeline lessons={lessons} activeLessonId={activeLessonId} fileHref={fileHref} />
+          {lessons.some((L: any) => L.activities?.microQuiz || L.activities?.lessonAssignment) && (
+            <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {lessons
+                .filter((L: any) => L.activities?.microQuiz || L.activities?.lessonAssignment)
+                .map((L: any) => (
+                  <div key={L.id} style={{ borderTop: '1px solid var(--border2)', paddingTop: 14 }}>
+                    <div className="text-sm text-white mb-4" style={{ fontWeight: 600 }}>
+                      Lesson {L.position}: {L.title}
+                    </div>
+                    <LessonStudentActivities lesson={L} onRefresh={reloadJourney} />
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!journeyLoading && handouts.length > 0 && (
         <div className="card mb-20">
           <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>Tutor handouts</div>
           {handouts.map((h: any) => (
-            <details key={h.id} style={{ marginBottom: 12, border: '1px solid var(--border2)', borderRadius: 10, padding: '10px 14px' }}>
-              <summary style={{ cursor: 'pointer', color: 'var(--white)', fontWeight: 600 }}>
-                {h.title}
-                {h.curriculumLesson?.title && <span className="text-muted text-sm" style={{ fontWeight: 400 }}> · {h.curriculumLesson.title}</span>}
-              </summary>
-              <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--muted)', fontSize: 13, marginTop: 12, maxHeight: 320, overflow: 'auto' }}>
-                {h.handoutMarkdown || '—'}
-              </pre>
-            </details>
+            <HandoutAccordion
+              key={h.id}
+              id={h.id}
+              title={h.title}
+              subtitle={h.curriculumLesson?.title}
+              markdown={h.handoutMarkdown || ''}
+            />
           ))}
+        </div>
+      )}
+
+      {!journeyLoading && !j?.activeModule && lessons.length === 0 && (
+        <div className="learning-empty card mb-20">
+          <div className="learning-empty-icon">📚</div>
+          <p>Your lesson journey will appear here once your class starts a module.</p>
         </div>
       )}
 
       <div className="card">
         <div className="font-display fw-600 text-white mb-12" style={{ fontSize: 15 }}>All modules</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          {progress.map((p: any) => (
-            <div key={p.id} className="module-progress-card" style={{ borderColor: p.status === 'COMPLETED' ? 'rgba(34,197,94,0.3)' : p.status === 'IN_PROGRESS' ? 'rgba(212,168,83,0.4)' : 'var(--border2)' }}>
-              <div className="flex-between mb-8"><h4>Module {p.module?.number}: {p.module?.title}</h4><span className={`badge badge-${p.status === 'COMPLETED' ? 'success' : p.status === 'IN_PROGRESS' ? 'warning' : 'warning'}`}>{p.status === 'COMPLETED' ? '✓ Done' : p.status === 'IN_PROGRESS' ? 'In Progress' : '🔒 Locked'}</span></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+          {progress.map((p: any) => {
+            const st = moduleStatusUi(p.status)
+            return (
+            <div key={p.id} className="module-progress-card" style={{ borderColor: st.border, background: p.status === 'FAILED' ? 'rgba(239,68,68,0.04)' : undefined }}>
+              <div className="flex-between mb-8"><h4>Module {p.module?.number}: {p.module?.title}</h4><span className={`badge badge-${st.badge}`}>{st.label}</span></div>
               <p style={{ fontSize: 13, color: 'var(--muted)' }}>{p.module?.description}</p>
               <div className="progress-bar-label"><span>Score</span><strong style={{ color: p.score ? (p.score >= 70 ? 'var(--success)' : 'var(--warning)') : 'var(--muted)' }}>{p.score ? `${p.score}%` : '—'}</strong></div>
-              <div className="progress-bar"><div className="progress-fill" style={{ width: p.status === 'COMPLETED' ? '100%' : p.status === 'IN_PROGRESS' ? '40%' : '0%' }}></div></div>
+              <div className="progress-bar"><div className="progress-fill" style={{ width: st.fill }}></div></div>
             </div>
-          ))}
-          {progress.length === 0 && <p className="text-muted text-sm" style={{ gridColumn: 'span 2', padding: '40px 0', textAlign: 'center' }}>No modules yet — your tutor will activate them.</p>}
+            )
+          })}
+          {progress.length === 0 && <p className="text-muted text-sm" style={{ gridColumn: '1 / -1', padding: '40px 0', textAlign: 'center' }}>No modules yet — your tutor will activate them.</p>}
         </div>
       </div>
     </div>
@@ -276,11 +343,14 @@ function StudentModules({ progress, student }: { progress: any[]; student: any }
 /* ── ASSIGNMENTS ── */
 function StudentAssignments({ student }: { student: any }) {
   const { data: assignments, loading, setData } = useLoad(['student', 'assignments', student?.id], () => assignmentsApi.mine(), [], !!student?.id)
-  const arr = Array.isArray(assignments) ? assignments : []
+  const arr = (Array.isArray(assignments) ? assignments : []).filter(
+    (a: any) => a?.assignmentKind !== 'lesson_practice',
+  )
   const [submitting, setSubmitting] = useState<string | null>(null)
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [submissionFiles, setSubmissionFiles] = useState<Record<string, File | null>>({})
   const [assignmentFiles, setAssignmentFiles] = useState<Record<string, any[]>>({})
+  const [replaceOpen, setReplaceOpen] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -303,17 +373,24 @@ function StudentAssignments({ student }: { student: any }) {
   }, [arr.map((a: any) => a.id).join('|')])
 
   const submit = async (id: string) => {
+    const file = submissionFiles[id]
+    const note = notes[id]?.trim()
+    if (!file && !note && !arr.find((a: any) => a.id === id)?.submission?.fileUrl) {
+      notify.warning('Add a note or choose a file to submit')
+      return
+    }
     setSubmitting(id)
     try {
       let uploadedUrl: string | undefined
-      const file = submissionFiles[id]
       if (file) {
         const uploaded = await uploadsApi.assignment(file, id)
         uploadedUrl = uploaded?.fileUrl
       }
-      await assignmentsApi.submit(id, { textBody: notes[id], fileUrl: uploadedUrl })
-      setData((arr as any[]).map((a: any) => a.id === id ? { ...a, submission: { status: 'SUBMITTED', submittedAt: new Date() } } : a) as any)
+      await assignmentsApi.submit(id, { textBody: note || undefined, fileUrl: uploadedUrl })
+      const refreshed = await assignmentsApi.mine().catch(() => null)
+      if (Array.isArray(refreshed)) setData(refreshed as any)
       setSubmissionFiles((prev) => ({ ...prev, [id]: null }))
+      setReplaceOpen((prev) => ({ ...prev, [id]: false }))
     } catch (e: any) { notify.fromError(e) }
     setSubmitting(null)
   }
@@ -340,14 +417,71 @@ function StudentAssignments({ student }: { student: any }) {
                 ))}
               </div>
             )}
-            {a.submission?.score != null && <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}><strong style={{ color: '#4ADE80' }}>Score: {a.submission.score}{a.maxScore ? `/${a.maxScore}` : '%'}</strong>{a.submission.feedback && <span style={{ color: 'var(--muted)', fontSize: 13, marginLeft: 12 }}>{a.submission.feedback}</span>}</div>}
-            {!a.submission && (
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input style={{ flex: 1, minWidth: 200, background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', color: 'var(--white)', fontSize: 13, outline: 'none' }} placeholder="Add a note (optional)…" value={notes[a.id] || ''} onChange={e => setNotes(n => ({ ...n, [a.id]: e.target.value }))} />
-                <input type="file" onChange={e => setSubmissionFiles((prev) => ({ ...prev, [a.id]: e.target.files?.[0] || null }))} />
-                <button onClick={() => submit(a.id)} className="btn btn-primary btn-sm" disabled={submitting === a.id}>{submitting === a.id ? 'Submitting…' : 'Submit →'}</button>
-              </div>
-            )}
+            {(() => {
+              const sub = a.submission
+              const isGraded = sub?.gradedAt != null || sub?.score != null
+              const canReplace = Boolean(sub) && !isGraded
+              const formOpen = !sub || replaceOpen[a.id]
+
+              return (
+                <>
+                  {sub?.score != null && (
+                    <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
+                      <strong style={{ color: '#4ADE80' }}>Score: {sub.score}{a.maxScore ? `/${a.maxScore}` : '%'}</strong>
+                      {sub.feedback && <div className="text-muted text-sm" style={{ marginTop: 6 }}>{sub.feedback}</div>}
+                      <StudentRubricBreakdown submission={sub} />
+                    </div>
+                  )}
+                  {sub && !isGraded && !formOpen && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                      <div className="text-muted text-xs">
+                        Submitted — waiting for tutor to grade.
+                        {sub.fileUrl ? (
+                          <span>
+                            {' '}
+                            <a href={sub.fileUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--teal2)' }}>View your file</a>
+                          </span>
+                        ) : null}
+                      </div>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplaceOpen((prev) => ({ ...prev, [a.id]: true }))}>
+                        Replace file
+                      </button>
+                    </div>
+                  )}
+                  {isGraded && sub?.fileUrl ? (
+                    <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                      <a href={sub.fileUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--teal2)' }}>View submitted file</a>
+                      {' — '}
+                      Graded submissions cannot be replaced.
+                    </div>
+                  ) : null}
+                  {formOpen && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <SubmissionUploadHints
+                        submissionType={a.submissionType}
+                        allowedExtensions={a.allowedExtensions}
+                        maxSizeMB={a.maxSizeMB}
+                      />
+                      {canReplace && (
+                        <div className="flex-between" style={{ gap: 8 }}>
+                          <span className="text-muted text-xs">Upload a new file to replace your previous submission.</span>
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplaceOpen((prev) => ({ ...prev, [a.id]: false }))} disabled={submitting === a.id}>
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                      <input style={{ width: '100%', background: 'var(--glass)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', color: 'var(--white)', fontSize: 13, outline: 'none' }} placeholder="Add a note (optional)…" value={notes[a.id] || ''} onChange={e => setNotes(n => ({ ...n, [a.id]: e.target.value }))} />
+                      <input type="file" onChange={e => setSubmissionFiles((prev) => ({ ...prev, [a.id]: e.target.files?.[0] || null }))} />
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <button onClick={() => submit(a.id)} className="btn btn-primary btn-sm" disabled={submitting === a.id}>
+                          {submitting === a.id ? 'Submitting…' : canReplace ? 'Replace submission →' : 'Submit →'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
           </div>
         ))}
       </div>
@@ -420,7 +554,8 @@ function StudentPracticals({ student }: { student: any }) {
             {t.submission?.totalScore != null && (
               <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
                 <strong style={{ color: '#4ADE80' }}>Score: {t.submission.totalScore}/{t.maxScore || 100}</strong>
-                {t.submission.feedback && <span style={{ color: 'var(--muted)', fontSize: 13, marginLeft: 12 }}>{t.submission.feedback}</span>}
+                {t.submission.feedback && <div className="text-muted text-sm" style={{ marginTop: 6 }}>{t.submission.feedback}</div>}
+                <StudentRubricBreakdown submission={t.submission} />
               </div>
             )}
             {(() => {
@@ -457,6 +592,11 @@ function StudentPracticals({ student }: { student: any }) {
 
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <SubmissionUploadHints
+                    submissionType={t.submissionType}
+                    allowedExtensions={t.allowedExtensions}
+                    maxSizeMB={t.maxSizeMB}
+                  />
                   {canRetake && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                       <div className="text-muted text-xs">
@@ -1495,6 +1635,7 @@ export default function StudentDashboard() {
     'student-asktutor': 'Messages', 'student-exams': 'My Exams', 'student-notifications': 'Notifications', 'student-settings': 'Settings',
     'parent-overview': 'Overview', 'parent-results': 'Results', 'parent-attendance': 'Attendance',
     'parent-exams': 'Exam Schedule', 'parent-notices': 'School Notices', 'parent-settings': 'Settings',
+    'student-leaderboard': 'Leaderboard',
   }
 
   const assignmentsArr = Array.isArray(assignmentBadgeData) ? assignmentBadgeData : []
@@ -1583,6 +1724,7 @@ export default function StudentDashboard() {
       case 'parent-settings': return <StudentSettings student={student} onProfileUpdated={refreshStudent} hidePassword />
       case 'parent-notices': return <SchoolNotices student={student} />
       case 'parent-overview': return <ParentOverview student={student} stats={stats} progress={progress} />
+      case 'student-leaderboard': return <LeaderboardPage role="student" />
       default: return isParent ? <ParentOverview student={student} stats={stats} progress={progress} /> : <StudentHome student={student} stats={stats} progress={progress} onSection={setSection} />
     }
   }

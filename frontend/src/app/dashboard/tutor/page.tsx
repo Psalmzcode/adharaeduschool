@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { DashboardShell } from '@/components/DashboardShell'
 import { ClassPerformancePanel } from '@/components/ClassPerformancePanel'
+import { TutorLessonActivitiesPanel } from '@/components/learning/TutorLessonActivitiesPanel'
 import type { ClassPerformanceChoice } from '@/components/ClassPerformancePanel'
 import { TutorProfileDetail } from '@/components/TutorProfileDetail'
 import {
@@ -11,8 +12,30 @@ import {
   lessonsApi, messagesApi, studentsApi, usersApi, uploadsApi,
   sessionsApi, assignmentsApi, examSchedulesApi, bulkUploadApi, modulesApi, schoolClassesApi, tracksApi, practicalsApi,
   curriculumApi, tutorAttendanceApi,
+  typingApi,
 } from '@/lib/api'
 import { notify } from '@/lib/notify'
+import { LeaderboardPage } from '@/components/leaderboard/LeaderboardPage'
+
+function parseExtensionList(raw?: string): string[] | undefined {
+  const list = String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return list.length ? list : undefined
+}
+import { MaterialPreview } from '@/components/learning'
+import { SubmissionGradingProposal, SubmissionTypeFields } from '@/components/grading/SubmissionGradingPanel'
+import { SubmissionEvidenceLinks } from '@/components/grading/SubmissionEvidenceLinks'
+import {
+  AiReviewQueueCard,
+  AiReviewItem,
+  PENDING_AI_REVIEW_KEY,
+  consumePendingAiReview,
+  useUnifiedAiReviewQueue,
+} from '@/components/grading/AiReviewQueueCard'
+import { StructuredRubricBuilder } from '@/components/grading/StructuredRubricBuilder'
+import type { StructuredRubric } from '@/components/grading/structured-rubric-defaults'
 
 function Modal({
   open,
@@ -160,6 +183,41 @@ async function fetchMergedTutorClasses(): Promise<any[]> {
   return Array.from(byKey.values())
 }
 
+function tutorAssignmentKey(c: any) {
+  const schoolId = String(c?.schoolId || c?.school?.id || '').trim()
+  const track = String(c?.track || '').trim()
+  const className = String(c?.className || '').trim()
+  return `${schoolId}::${track}::${className}`
+}
+
+function tutorAssignmentLabel(c: any) {
+  const className = String(c?.className || '').trim()
+  const track = String(c?.track || 'TRACK_1').replace(/^TRACK_/i, 'Track ')
+  const schoolName = String(c?.school?.name || '').trim()
+  return schoolName ? `${className} · ${track} · ${schoolName}` : `${className} · ${track}`
+}
+
+/** One row per school + class + track (tutors may teach the same class name at multiple schools). */
+function dedupeTutorAssignments(classes: any[]) {
+  const seen = new Set<string>()
+  const rows: any[] = []
+  for (const c of Array.isArray(classes) ? classes : []) {
+    const schoolId = String(c?.schoolId || c?.school?.id || '').trim()
+    const className = String(c?.className || '').trim()
+    const track = String(c?.track || '').trim()
+    if (!schoolId || !className || !track) continue
+    const key = tutorAssignmentKey(c)
+    if (seen.has(key)) continue
+    seen.add(key)
+    rows.push(c)
+  }
+  return rows.sort((a, b) => {
+    const byClass = String(a.className).localeCompare(String(b.className))
+    if (byClass !== 0) return byClass
+    return String(a?.school?.name || '').localeCompare(String(b?.school?.name || ''))
+  })
+}
+
 function initials(name: string) { return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() }
 const COLORS = ['rgba(212,168,83,0.2)','rgba(26,127,212,0.2)','rgba(139,92,246,0.2)','rgba(34,197,94,0.2)','rgba(239,68,68,0.2)','rgba(245,158,11,0.2)']
 const TEXT_COLORS = ['var(--gold)','var(--teal2)','#A78BFA','#4ADE80','#F87171','#FCD34D']
@@ -172,6 +230,24 @@ function studentColor(i: number) {
 
 // ─── OVERVIEW ─────────────────────────────────────────────────
 function TutorOverview({ stats, classes, onSection }: { stats: TutorStats | null; classes: any[]; onSection: (s: string) => void }) {
+  const { items, reload } = useUnifiedAiReviewQueue()
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+  const handleApproveFromQueue = async (item: AiReviewItem) => {
+    setApprovingId(item.id)
+    try {
+      if (item.kind === 'assignment') await assignmentsApi.approveAiGrade(item.id, {})
+      else await practicalsApi.approveAiGrade(item.id, {})
+      notify.success('AI grade approved')
+      reload()
+    } catch (e: any) {
+      notify.error(e?.message || 'Failed to approve AI grade')
+    }
+    setApprovingId(null)
+  }
+  const handleAiReview = (item: AiReviewItem) => {
+    sessionStorage.setItem(PENDING_AI_REVIEW_KEY, JSON.stringify(item))
+    onSection(item.kind === 'assignment' ? 'tutor-assignments' : 'tutor-practicals')
+  }
   const todayClass = classes[0]
   const students = classes.flatMap(c => c.students || [])
   const atRisk = students.filter((s: any) => {
@@ -181,6 +257,7 @@ function TutorOverview({ stats, classes, onSection }: { stats: TutorStats | null
   }).slice(0, 3)
 
   return (<>
+    <AiReviewQueueCard items={items} onReview={handleAiReview} onApprove={handleApproveFromQueue} approvingId={approvingId} />
     <div className="stats-row">
       {[
         { glow: 'var(--gold)', icon: '👥', bg: 'rgba(212,168,83,0.15)', val: stats?.totalStudents ?? '—', label: 'My Students', trend: classes.map(c => c.className).join(' & ') || 'No classes yet' },
@@ -267,74 +344,48 @@ function TutorClasses({
 }: {
   classes: any[]
   onClassesChange: React.Dispatch<React.SetStateAction<any[]>>
-  onOpenClass: (className: string) => void
+  onOpenClass: (assignmentKey: string) => void
 }) {
-  // NOTE: School Admin owns class creation for billing control.
-  const { data: dynamicTracks } = useQuery({
-    queryKey: ['tutor', 'tracks-options'],
-    queryFn: () => tracksApi.all(),
-    staleTime: 60_000,
-    retry: 1,
-  })
-
-  const grouped = classes.reduce((acc: Record<string, any>, c: any) => {
-    const key = c.className || 'Unassigned'
-    if (!acc[key]) {
-      acc[key] = {
-        className: key,
-        total: 0,
-        tracks: { TRACK_1: 0, TRACK_2: 0, TRACK_3: 0 },
-        primaryTrack: c.track || 'TRACK_1',
-      }
-    }
-    const classStudents = Array.isArray(c.students) ? c.students : []
-    acc[key].total += classStudents.length
-    if (c.track && acc[key].tracks[c.track] !== undefined) acc[key].tracks[c.track] += classStudents.length || 1
-    return acc
-  }, {})
-
-  const classCards = Object.values(grouped)
-    .map((c: any) => {
-      const topTrack = (['TRACK_1', 'TRACK_2', 'TRACK_3'] as const).reduce((best, t) =>
-        c.tracks[t] > c.tracks[best] ? t : best, 'TRACK_1')
-      return { ...c, displayTrack: c.total > 0 ? topTrack : c.primaryTrack }
-    })
-    .sort((a: any, b: any) => a.className.localeCompare(b.className))
+  const assignmentCards = useMemo(() => dedupeTutorAssignments(classes), [classes])
 
   return (
     <div>
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Classes</h3>
-          <div className="text-muted text-sm">{classCards.length} classes assigned</div>
+          <div className="text-muted text-sm">{assignmentCards.length} classes assigned</div>
         </div>
       </div>
       <div className="content-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))' }}>
-        {classCards.map((c: any) => (
+        {assignmentCards.map((c: any) => {
+          const key = tutorAssignmentKey(c)
+          const track = c.track || 'TRACK_1'
+          const schoolName = String(c?.school?.name || '').trim()
+          const studentCount = Array.isArray(c.students) ? c.students.length : 0
+          return (
           <button
-            key={c.className}
+            key={key}
             className="card"
             style={{ padding: 20, textAlign: 'left', cursor: 'pointer', border: '1px solid var(--border)' }}
-            onClick={() => onOpenClass(c.className)}
-            title={`View ${c.className} students`}
+            onClick={() => onOpenClass(key)}
+            title={`View ${tutorAssignmentLabel(c)} students`}
           >
             <div className="flex-between mb-8">
               <div className="font-display fw-700 text-white" style={{ fontSize: 18 }}>{c.className}</div>
-              <span className={`badge ${c.displayTrack === 'TRACK_3' ? 'badge-info' : c.displayTrack === 'TRACK_2' ? 'badge-gold' : 'badge-teal'}`}>
-                {c.displayTrack.replace('TRACK_', 'Track ')}
+              <span className={`badge ${track === 'TRACK_3' ? 'badge-info' : track === 'TRACK_2' ? 'badge-gold' : 'badge-teal'}`}>
+                {String(track).replace('TRACK_', 'Track ')}
               </span>
             </div>
-            <div style={{ fontSize: 28, fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--gold)', marginBottom: 4 }}>{c.total}</div>
-            <div className="text-muted text-sm" style={{ marginBottom: 12 }}>Total Students</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <span className="badge badge-teal">T1: {c.tracks.TRACK_1}</span>
-              <span className="badge badge-warning">T2: {c.tracks.TRACK_2}</span>
-              <span className="badge badge-info">T3: {c.tracks.TRACK_3}</span>
-            </div>
+            {schoolName && (
+              <div className="text-muted text-xs" style={{ marginBottom: 8 }}>{schoolName}</div>
+            )}
+            <div style={{ fontSize: 28, fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--gold)', marginBottom: 4 }}>{studentCount}</div>
+            <div className="text-muted text-sm" style={{ marginBottom: 12 }}>Students</div>
             <div className="text-muted text-xs" style={{ marginTop: 10 }}>Click card to view students →</div>
           </button>
-        ))}
-        {classCards.length === 0 && (
+          )
+        })}
+        {assignmentCards.length === 0 && (
           <div className="card" style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>
             No classes available
           </div>
@@ -348,13 +399,13 @@ function TutorClasses({
 function TutorStudents({
   classes,
   onClassesChange,
-  selectedClass,
+  selectedClassKey,
   onBackToClasses,
   onClearClass,
 }: {
   classes: any[]
   onClassesChange: React.Dispatch<React.SetStateAction<any[]>>
-  selectedClass?: string | null
+  selectedClassKey?: string | null
   onBackToClasses?: () => void
   onClearClass?: () => void
 }) {
@@ -385,26 +436,37 @@ function TutorStudents({
   // `fetchMergedTutorClasses()` also merges in school registry classes (ids like "school-class-SS3A"),
   // which the tutor is NOT necessarily assigned to and the backend will forbid bulk upload for.
   const assignedClasses = classes.filter((c: any) => !String(c?.id || '').startsWith('school-class-'))
-  const classOptions = Array.from(new Set(assignedClasses.map((c: any) => c.className))).filter(Boolean).sort()
-  const resolveSchoolId = (className?: string) =>
-    assignedClasses.find((c: any) => c.className === className)?.schoolId ||
-    assignedClasses.find((c: any) => c.className === className)?.school?.id ||
-    assignedClasses[0]?.schoolId ||
-    assignedClasses[0]?.school?.id ||
-    ''
+  const assignmentOptions = useMemo(() => dedupeTutorAssignments(assignedClasses), [assignedClasses])
+  const selectedAssignment = useMemo(
+    () => (selectedClassKey ? assignmentOptions.find((c: any) => tutorAssignmentKey(c) === selectedClassKey) : null),
+    [assignmentOptions, selectedClassKey],
+  )
+  const selectedClassLabel = selectedAssignment ? tutorAssignmentLabel(selectedAssignment) : ''
+  const resolveSchoolId = (assignmentKey?: string) => {
+    const row = assignmentKey
+      ? assignmentOptions.find((c: any) => tutorAssignmentKey(c) === assignmentKey)
+      : selectedAssignment
+    return row?.schoolId || row?.school?.id || assignedClasses[0]?.schoolId || assignedClasses[0]?.school?.id || ''
+  }
 
   useEffect(() => {
-    if (!studentForm.className && classOptions.length) {
-      const first = classOptions[0]
-      setStudentForm((prev) => ({ ...prev, className: first, track: classTrackMap[first] || prev.track }))
+    if (!studentForm.className && assignmentOptions.length) {
+      const first = assignmentOptions[0]
+      setStudentForm((prev) => ({
+        ...prev,
+        className: first.className,
+        track: first.track || classTrackMap[first.className] || prev.track,
+      }))
     }
-    if (!bulkForm.className && classOptions.length) {
-      setBulkForm((prev) => ({ ...prev, className: classOptions[0] }))
+    if (!bulkForm.className && assignmentOptions.length) {
+      setBulkForm((prev) => ({ ...prev, className: assignmentOptions[0].className }))
     }
-  }, [classOptions, classTrackMap, studentForm.className, bulkForm.className])
+  }, [assignmentOptions, classTrackMap, studentForm.className, bulkForm.className])
 
 
-  const filteredClasses = selectedClass ? classes.filter((c: any) => c.className === selectedClass) : classes
+  const filteredClasses = selectedClassKey
+    ? classes.filter((c: any) => tutorAssignmentKey(c) === selectedClassKey)
+    : classes
   const students = filteredClasses.flatMap((c: any, ci: number) =>
     (c.students || []).map((s: any, si: number) => {
       const scores = s.moduleProgress?.map((p: any) => p.score).filter(Boolean) || []
@@ -570,12 +632,12 @@ function TutorStudents({
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>My Students</h3>
           <div className="text-muted text-sm">
             {students.length} students
-            {selectedClass ? ` in ${selectedClass}` : ` across ${classes.length} classes`}
+            {selectedClassKey ? ` in ${selectedClassLabel}` : ` across ${assignmentOptions.length} classes`}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {selectedClass && <button onClick={onBackToClasses} className="btn btn-ghost btn-sm">Back to Classes</button>}
-          {selectedClass && <button onClick={onClearClass} className="btn btn-ghost btn-sm">Clear Class Filter</button>}
+          {selectedClassKey && <button onClick={onBackToClasses} className="btn btn-ghost btn-sm">Back to Classes</button>}
+          {selectedClassKey && <button onClick={onClearClass} className="btn btn-ghost btn-sm">Clear Class Filter</button>}
         </div>
       </div>
       <div style={{ marginBottom: 16 }}><input className="form-input" placeholder="Search by name or reg number…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 320 }} /></div>
@@ -720,9 +782,9 @@ function TutorStudents({
 // ─── ATTENDANCE ───────────────────────────────────────────────
 function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string }) {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
-  const [selectedClass, setSelectedClass] = useState('')
+  const [selectedClassKey, setSelectedClassKey] = useState('')
   const [mode, setMode] = useState<'cards' | 'record' | 'view'>('cards')
-  const [openMenuClass, setOpenMenuClass] = useState<string | null>(null)
+  const [openMenuClassKey, setOpenMenuClassKey] = useState<string | null>(null)
   const [records, setRecords] = useState<any[]>([])
   const [weekly, setWeekly] = useState<any[]>([])
   const [weeks, setWeeks] = useState(8)
@@ -731,17 +793,23 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
   const [loading, setLoading] = useState(false)
   const [loadingWeekly, setLoadingWeekly] = useState(false)
 
-  const selectedClassObj = classes.find(c => c.className === selectedClass)
-  const schoolId = selectedClassObj?.schoolId || selectedClassObj?.school?.id
+  const assignmentCards = useMemo(() => dedupeTutorAssignments(classes), [classes])
+  const selectedAssignment = useMemo(
+    () => assignmentCards.find((c: any) => tutorAssignmentKey(c) === selectedClassKey) || null,
+    [assignmentCards, selectedClassKey],
+  )
+  const selectedClass = selectedAssignment?.className || ''
+  const selectedLabel = selectedAssignment ? tutorAssignmentLabel(selectedAssignment) : ''
+  const schoolId = selectedAssignment?.schoolId || selectedAssignment?.school?.id
 
   const loadRecordAttendance = useCallback(async () => {
-    if (!selectedClass || !schoolId) return
+    if (!selectedAssignment || !schoolId || !selectedClass) return
     setLoading(true)
     try {
       const data = await attendanceApi.classView(schoolId, selectedClass, date)
       setRecords(data.map((r: any) => ({ ...r, status: r.status || 'PRESENT' })))
     } catch {
-      const students = selectedClassObj?.students || []
+      const students = selectedAssignment.students || []
       setRecords(students.map((s: any) => ({
         studentId: s.id,
         name: `${s.user?.firstName} ${s.user?.lastName}`,
@@ -751,10 +819,10 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
     }
     setLoading(false)
     setSaved(false)
-  }, [selectedClass, date, selectedClassObj, schoolId])
+  }, [selectedAssignment, schoolId, selectedClass, date])
 
   const loadWeeklyAttendance = useCallback(async () => {
-    if (!selectedClass || !schoolId) return
+    if (!selectedAssignment || !schoolId || !selectedClass) return
     setLoadingWeekly(true)
     try {
       const data = await attendanceApi.schoolWeekly(schoolId, weeks, selectedClass)
@@ -763,7 +831,7 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
       setWeekly([])
     }
     setLoadingWeekly(false)
-  }, [schoolId, selectedClass, weeks])
+  }, [selectedAssignment, schoolId, selectedClass, weeks])
 
   useEffect(() => {
     if (mode === 'record') loadRecordAttendance()
@@ -802,18 +870,21 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
           </div>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,300px))',gap:14,justifyContent:'start'}}>
-          {classes.map((c:any)=> {
+          {assignmentCards.map((c:any)=> {
+            const key = tutorAssignmentKey(c)
             const track = c.track || 'TRACK_1'
+            const schoolName = String(c?.school?.name || '').trim()
             const studentCount = Array.isArray(c.students) ? c.students.length : 0
             return (
-              <div key={c.className} className="card" style={{position:'relative',padding:16}}>
+              <div key={key} className="card" style={{position:'relative',padding:16}}>
                 <div className="flex-between mb-12" style={{alignItems:'flex-start'}}>
                   <div>
                     <div className="font-display fw-700 text-white" style={{fontSize:18}}>{c.className}</div>
                     <div className="text-muted text-xs mt-4">{String(track).replace('TRACK_', 'Track ')}</div>
+                    {schoolName && <div className="text-muted text-xs mt-4">{schoolName}</div>}
                   </div>
                   <button
-                    onClick={() => setOpenMenuClass(prev => prev === c.className ? null : c.className)}
+                    onClick={() => setOpenMenuClassKey(prev => prev === key ? null : key)}
                     className="btn btn-ghost btn-sm"
                     style={{padding:'4px 8px',minWidth:32}}
                     title="Attendance options"
@@ -823,15 +894,15 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
                 </div>
                 <div style={{fontSize:26,fontFamily:'var(--font-display)',fontWeight:800,color:'var(--gold)'}}>{studentCount}</div>
                 <div className="text-muted text-sm">Students</div>
-                {openMenuClass === c.className && (
+                {openMenuClassKey === key && (
                   <div style={{position:'absolute',top:44,right:12,zIndex:5,background:'var(--navy2)',border:'1px solid var(--border2)',borderRadius:10,padding:8,minWidth:180,display:'flex',flexDirection:'column',gap:6}}>
                     <button
                       className="btn btn-ghost btn-sm"
                       style={{justifyContent:'flex-start'}}
                       onClick={() => {
-                        setSelectedClass(c.className)
+                        setSelectedClassKey(key)
                         setMode('view')
-                        setOpenMenuClass(null)
+                        setOpenMenuClassKey(null)
                       }}
                     >
                       View Attendance
@@ -840,9 +911,9 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
                       className="btn btn-primary btn-sm"
                       style={{justifyContent:'flex-start'}}
                       onClick={() => {
-                        setSelectedClass(c.className)
+                        setSelectedClassKey(key)
                         setMode('record')
-                        setOpenMenuClass(null)
+                        setOpenMenuClassKey(null)
                       }}
                     >
                       Record Attendance
@@ -852,7 +923,7 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
               </div>
             )
           })}
-          {classes.length === 0 && (
+          {assignmentCards.length === 0 && (
             <div className="card" style={{textAlign:'center',color:'var(--muted)',padding:'32px 0'}}>No classes assigned yet.</div>
           )}
         </div>
@@ -874,11 +945,11 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
         <div className="flex-between mb-20">
           <div>
             <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>View Attendance</h3>
-            <div className="text-muted text-sm mt-4">Class: {selectedClass}</div>
+            <div className="text-muted text-sm mt-4">{selectedLabel || `Class: ${selectedClass}`}</div>
           </div>
           <div style={{display:'flex',gap:8}}>
             <button onClick={() => setMode('record')} className="btn btn-ghost btn-sm">Record For This Class</button>
-            <button onClick={() => { setMode('cards'); setSelectedClass('') }} className="btn btn-ghost btn-sm">Back to Class Cards</button>
+            <button onClick={() => { setMode('cards'); setSelectedClassKey('') }} className="btn btn-ghost btn-sm">Back to Class Cards</button>
           </div>
         </div>
         <div style={{display:'flex',gap:12,marginBottom:16,flexWrap:'wrap'}}>
@@ -918,7 +989,7 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Record Attendance</h3>
-          <div className="text-muted text-sm mt-4">Class: {selectedClass}</div>
+          <div className="text-muted text-sm mt-4">{selectedLabel || `Class: ${selectedClass}`}</div>
         </div>
         <div style={{display:'flex',gap:8}}>
           <button onClick={() => setMode('view')} className="btn btn-ghost btn-sm">View This Class</button>
@@ -928,16 +999,19 @@ function TutorAttendance({ classes, tutorId }: { classes: any[]; tutorId: string
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
         <div><label className="form-label">Date</label><input type="date" className="form-input" value={date} onChange={e => { setDate(e.target.value); setSaved(false) }} style={{ width: 180 }} /></div>
         <div><label className="form-label">Class</label>
-          <select className="form-input" value={selectedClass} onChange={e => setSelectedClass(e.target.value)} style={{ appearance: 'none', width: 160 }}>
-            {classes.map(c => <option key={c.className}>{c.className}</option>)}
-            {classes.length === 0 && <option>No classes</option>}
+          <select className="form-input" value={selectedClassKey} onChange={e => setSelectedClassKey(e.target.value)} style={{ appearance: 'none', minWidth: 220, maxWidth: 360 }}>
+            {assignmentCards.map(c => {
+              const key = tutorAssignmentKey(c)
+              return <option key={key} value={key}>{tutorAssignmentLabel(c)}</option>
+            })}
+            {assignmentCards.length === 0 && <option>No classes</option>}
           </select>
         </div>
-        <button className="btn btn-ghost btn-sm" style={{alignSelf:'flex-end'}} onClick={() => { setMode('cards'); setSelectedClass('') }}>Back to Class Cards</button>
+        <button className="btn btn-ghost btn-sm" style={{alignSelf:'flex-end'}} onClick={() => { setMode('cards'); setSelectedClassKey('') }}>Back to Class Cards</button>
       </div>
       <div className="card">
         <div className="flex-between mb-16">
-          <div className="font-display fw-600 text-white">{selectedClass} · {new Date(date + 'T00:00:00').toLocaleDateString('en-NG', { weekday: 'long', month: 'long', day: 'numeric' })}</div>
+          <div className="font-display fw-600 text-white">{selectedLabel || selectedClass} · {new Date(date + 'T00:00:00').toLocaleDateString('en-NG', { weekday: 'long', month: 'long', day: 'numeric' })}</div>
           <div style={{ fontSize: 13, display: 'flex', gap: 16 }}>
             <span style={{ color: 'var(--success)' }}>✓ {records.filter(r => r.status === 'PRESENT').length} Present</span>
             <span style={{ color: 'var(--warning)' }}>⏰ {records.filter(r => r.status === 'LATE').length} Late</span>
@@ -1044,6 +1118,8 @@ function TutorResults({
   const [applyingRetake, setApplyingRetake] = useState(false)
   /** Best module CBT % and best practical % per student (from suggested-scores; mirrors how practicals show per-task scores). */
   const [markBreakdown, setMarkBreakdown] = useState<Record<string, { cbtBest: number | null; pracBest: number | null }>>({})
+  const [lessonFormative, setLessonFormative] = useState<Record<string, { averageScore: number | null; attemptedCount: number; assignedCount: number }>>({})
+  const [typingSummary, setTypingSummary] = useState<Record<string, { labUnlocked?: boolean; practiceSessions: number; bestFormalWpm: number | null; bestFormalAccuracy: number | null }>>({})
 
   const fmtMarkComponent = (v: number | null | undefined) =>
     v != null && !Number.isNaN(Number(v)) ? String(Math.round(Number(v))) : '—'
@@ -1071,6 +1147,70 @@ function TutorResults({
     setSaved(false)
     loadClassProgress()
   }, [selectedClass, loadClassProgress])
+
+  useEffect(() => {
+    const mid = classProgress?.currentModule?.id
+    if (!schoolId || !selectedClass || !mid) {
+      setLessonFormative({})
+      return
+    }
+    let cancelled = false
+    curriculumApi
+      .lessonFormativeSummary(schoolId, selectedClass, mid)
+      .then((rows) => {
+        if (cancelled) return
+        const map: Record<string, { averageScore: number | null; attemptedCount: number; assignedCount: number }> = {}
+        ;(Array.isArray(rows) ? rows : []).forEach((r: any) => {
+          if (r?.studentId) {
+            map[r.studentId] = {
+              averageScore: r.averageScore ?? null,
+              attemptedCount: r.attemptedCount ?? 0,
+              assignedCount: r.assignedCount ?? 0,
+            }
+          }
+        })
+        setLessonFormative(map)
+      })
+      .catch(() => {
+        if (!cancelled) setLessonFormative({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [schoolId, selectedClass, classProgress?.currentModule?.id])
+
+  const showTypingCol = classProgress?.track === 'TRACK_1'
+
+  useEffect(() => {
+    if (!showTypingCol || !schoolId || !selectedClass) {
+      setTypingSummary({})
+      return
+    }
+    let cancelled = false
+    typingApi
+      .classSummary(schoolId, selectedClass)
+      .then((rows) => {
+        if (cancelled) return
+        const map: Record<string, { labUnlocked?: boolean; practiceSessions: number; bestFormalWpm: number | null; bestFormalAccuracy: number | null }> = {}
+        ;(Array.isArray(rows) ? rows : []).forEach((r: any) => {
+          if (r?.studentId) {
+            map[r.studentId] = {
+              labUnlocked: r.labUnlocked,
+              practiceSessions: r.practiceSessions ?? 0,
+              bestFormalWpm: r.bestFormalWpm ?? null,
+              bestFormalAccuracy: r.bestFormalAccuracy ?? null,
+            }
+          }
+        })
+        setTypingSummary(map)
+      })
+      .catch(() => {
+        if (!cancelled) setTypingSummary({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showTypingCol, schoolId, selectedClass])
 
   // Reset retake selection when class changes
   useEffect(() => {
@@ -1284,6 +1424,14 @@ function TutorResults({
           <div className="text-muted text-sm">No active module found for this class</div>
         )}
       </div>
+      {classProgress?.currentModule && schoolId && selectedClass && (
+        <TutorLessonActivitiesPanel
+          moduleId={classProgress.currentModule.id}
+          schoolId={schoolId}
+          className={selectedClass}
+          moduleLabel={`Module ${classProgress.currentModule.number}: ${classProgress.currentModule.title}`}
+        />
+      )}
       <div className="card">
         {scoresLoading && (
           <div className="text-muted text-xs mb-12" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1292,7 +1440,7 @@ function TutorResults({
           </div>
         )}
         <table className="data-table">
-          <thead><tr><th>Student</th><th>Current Module</th><th>Score (0–100)</th><th>Grade</th></tr></thead>
+          <thead><tr><th>Student</th><th>Current Module</th><th>Lesson avg</th>{showTypingCol && <th>Typing</th>}<th>Score (0–100)</th><th>Grade</th></tr></thead>
           <tbody>
             {students.map((s: any, i: number) => {
               const name = `${s.user?.firstName} ${s.user?.lastName}`
@@ -1300,6 +1448,35 @@ function TutorResults({
                 <tr key={s.id}>
                   <td><div className="student-name"><div className="stu-av" style={{ ...studentColor(i) }}>{initials(name)}</div>{name}</div></td>
                   <td style={{ fontSize: 12, color: 'var(--muted)' }}>{classProgress?.currentModule?.title || 'No active module'}</td>
+                  <td className="text-xs text-muted" style={{ whiteSpace: 'nowrap' }}>
+                    {(() => {
+                      const lf = lessonFormative[s.id]
+                      if (!lf || lf.assignedCount === 0) return '—'
+                      const avg = lf.averageScore != null ? `${lf.averageScore}%` : '—'
+                      return `${avg} (${lf.attemptedCount}/${lf.assignedCount})`
+                    })()}
+                  </td>
+                  {showTypingCol && (
+                    <td className="text-xs text-muted" style={{ whiteSpace: 'nowrap' }}>
+                      {(() => {
+                        const ts = typingSummary[s.id]
+                        if (!ts) return '—'
+                        if (ts.labUnlocked === false) return 'Not unlocked'
+                        const wpm =
+                          ts.bestFormalWpm != null
+                            ? `${Math.round(ts.bestFormalWpm)} WPM${ts.bestFormalAccuracy != null ? ` (${Math.round(ts.bestFormalAccuracy)}%)` : ''}`
+                            : '—'
+                        return (
+                          <span title={`${ts.practiceSessions} practice session(s)`}>
+                            {wpm}
+                            {ts.practiceSessions > 0 && (
+                              <span className="text-muted"> · {ts.practiceSessions} practice</span>
+                            )}
+                          </span>
+                        )
+                      })()}
+                    </td>
+                  )}
                   <td>
                     <input
                       type="number"
@@ -1315,7 +1492,7 @@ function TutorResults({
                 </tr>
               )
             })}
-            {students.length === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No students in selected class</td></tr>}
+            {students.length === 0 && <tr><td colSpan={showTypingCol ? 6 : 5} style={{ textAlign: 'center', color: 'var(--muted)', padding: '32px 0' }}>No students in selected class</td></tr>}
           </tbody>
         </table>
       </div>
@@ -1463,6 +1640,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
     studentHandoutMarkdown?: string
     practice?: { classwork: string[]; homework: string[]; answers: string[] }
     modelUsed?: string
+    depth?: 'full' | 'quick'
   } | null>(null)
   const [materialView, setMaterialView] = useState<'slides' | 'teacher' | 'handout' | 'practice'>('handout')
   const [materialDepth, setMaterialDepth] = useState<'full' | 'quick'>('full')
@@ -1712,6 +1890,7 @@ function LessonPlans({ classes }: { classes: any[] }) {
               }
             : undefined,
         modelUsed: (res as any)?.modelUsed,
+        depth: (res as any)?.depth === 'quick' ? 'quick' : 'full',
       })
       setMaterialView(studentHandoutMarkdown ? 'handout' : teacherGuideMarkdown ? 'teacher' : 'slides')
       setMaterialDraftModal(true)
@@ -2014,14 +2193,20 @@ ${slidesHtml}
           setMaterialDraft(null)
         }}
         title="AI teaching material (draft)"
-        panelMaxWidth={920}
+        panelMaxWidth={1080}
       >
         {materialDraft && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <p className="text-muted text-sm" style={{ margin: 0 }}>
-              Start with the <strong>Student handout</strong> tab for the full topic write-up. Slides are a short classroom summary only.
-              Export as Markdown or publish the handout to your class after saving the lesson plan.
-            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+              <p className="text-muted text-sm" style={{ margin: 0, flex: '1 1 200px' }}>
+                Start with <strong>Student handout</strong> for the full topic. Slides are a classroom summary only.
+              </p>
+              {materialDraft.depth && (
+                <span className="material-depth-badge">
+                  {materialDraft.depth === 'full' ? 'Full depth · ~45s' : 'Quick draft'}
+                </span>
+              )}
+            </div>
             {materialDraft.modelUsed && (
               <div className="text-muted text-xs">Model: {materialDraft.modelUsed}</div>
             )}
@@ -2070,7 +2255,7 @@ ${slidesHtml}
                 Practice
               </button>
             </div>
-            <div style={{ border: '1px solid var(--border2)', borderRadius: 12, padding: 14, maxHeight: 'min(55vh, 520px)', overflow: 'auto' }}>
+            <div className="learning-material-panel">
               <div className="font-display fw-700 text-white mb-12" style={{ fontSize: 16 }}>{materialDraft.sessionTitle}</div>
               {materialView === 'slides' && (
                 <>
@@ -2086,15 +2271,23 @@ ${slidesHtml}
                   ))}
                 </>
               )}
-              {materialView === 'teacher' && (
-                <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--white)', fontSize: 13, margin: 0 }}>
-                  {materialDraft.teacherGuideMarkdown || '—'}
-                </pre>
+              {materialView === 'teacher' && materialDraft.teacherGuideMarkdown?.trim() && (
+                <MaterialPreview
+                  markdown={materialDraft.teacherGuideMarkdown}
+                  title={materialDraft.sessionTitle}
+                />
               )}
-              {materialView === 'handout' && (
-                <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--white)', fontSize: 13, margin: 0 }}>
-                  {materialDraft.studentHandoutMarkdown || '—'}
-                </pre>
+              {materialView === 'handout' && materialDraft.studentHandoutMarkdown?.trim() && (
+                <MaterialPreview
+                  markdown={materialDraft.studentHandoutMarkdown}
+                  title={materialDraft.sessionTitle}
+                />
+              )}
+              {materialView === 'teacher' && !materialDraft.teacherGuideMarkdown?.trim() && (
+                <p className="text-muted text-sm">No teacher guide in this draft.</p>
+              )}
+              {materialView === 'handout' && !materialDraft.studentHandoutMarkdown?.trim() && (
+                <p className="text-muted text-sm">No student handout in this draft.</p>
               )}
               {materialView === 'practice' && (
                 <div style={{ color: 'var(--white)', fontSize: 13 }}>
@@ -2402,7 +2595,7 @@ ${slidesHtml}
 }
 
 // ─── ASSIGNMENTS ───────────────────────────────────────────────
-function TutorAssignments({ classes }: { classes: any[] }) {
+function TutorAssignments({ classes, onSection }: { classes: any[]; onSection: (s: string) => void }) {
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
@@ -2412,8 +2605,11 @@ function TutorAssignments({ classes }: { classes: any[] }) {
   const [assignmentSubmissions, setAssignmentSubmissions] = useState<any[]>([])
   const [loadingAssignmentSubmissions, setLoadingAssignmentSubmissions] = useState(false)
   const [gradingAssignment, setGradingAssignment] = useState(false)
+  const [asgAiGradingId, setAsgAiGradingId] = useState<string | null>(null)
   const [asgScoreById, setAsgScoreById] = useState<Record<string, string>>({})
   const [asgFeedbackById, setAsgFeedbackById] = useState<Record<string, string>>({})
+  const [queueRefresh, setQueueRefresh] = useState(0)
+  const { items: aiReviewItems } = useUnifiedAiReviewQueue(queueRefresh)
   const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
   const [materialFile, setMaterialFile] = useState<File | null>(null)
   const [modulesForTrack, setModulesForTrack] = useState<Array<{ value: string; label: string; moduleId: string }>>([])
@@ -2452,7 +2648,14 @@ function TutorAssignments({ classes }: { classes: any[] }) {
     description: '',
     dueDate: '',
     moduleId: '',
+    submissionType: 'mixed',
+    modelAnswer: '',
+    lessonObjective: '',
+    allowedExtensions: '',
+    maxSizeMB: '10',
+    structuredRubric: null as StructuredRubric | null,
   })
+  const [queueApprovingId, setQueueApprovingId] = useState<string | null>(null)
   useEffect(() => {
     if (!trackChoices.length) return
     if (!form.track || !trackChoices.some((t) => t.code === form.track)) {
@@ -2500,6 +2703,21 @@ function TutorAssignments({ classes }: { classes: any[] }) {
     }
     loadModules()
   }, [form.track, form.classNames.join('|'), JSON.stringify(classOptions.map((c) => `${c.className}:${c.track}:${c.track3Stack || ''}`))])
+
+  const approveAssignmentFromQueue = async (item: AiReviewItem) => {
+    setQueueApprovingId(item.id)
+    try {
+      await assignmentsApi.approveAiGrade(item.id, {})
+      setQueueRefresh((n) => n + 1)
+      if (selectedAssignmentId && item.parentId === selectedAssignmentId) {
+        await openAssignmentModal(selectedAssignmentId)
+      }
+      notify.success('AI grade approved')
+    } catch (e: any) {
+      notify.error(e?.message || 'Failed to approve AI grade')
+    }
+    setQueueApprovingId(null)
+  }
 
   const loadAssignments = useCallback(async () => {
     setLoading(true)
@@ -2566,6 +2784,13 @@ function TutorAssignments({ classes }: { classes: any[] }) {
     [loadAssignmentSubmissions],
   )
 
+  useEffect(() => {
+    const pending = consumePendingAiReview()
+    if (pending?.kind === 'assignment' && pending.parentId) {
+      openAssignmentModal(pending.parentId)
+    }
+  }, [openAssignmentModal])
+
   const gradeAssignmentSubmission = useCallback(
     async (submissionId: string) => {
       const score = Number(asgScoreById[submissionId])
@@ -2577,9 +2802,50 @@ function TutorAssignments({ classes }: { classes: any[] }) {
       try {
         await assignmentsApi.grade(submissionId, score, asgFeedbackById[submissionId] || '')
         if (selectedAssignmentId) await loadAssignmentSubmissions(selectedAssignmentId)
+        setQueueRefresh((n) => n + 1)
         notify.success('Grade saved')
       } catch (e: any) {
         notify.error(e?.message || 'Failed to save grade')
+      }
+      setGradingAssignment(false)
+    },
+    [asgFeedbackById, asgScoreById, loadAssignmentSubmissions, selectedAssignmentId],
+  )
+
+  const runAssignmentAiGrade = useCallback(
+    async (submissionId: string) => {
+      setAsgAiGradingId(submissionId)
+      try {
+        const updated = await assignmentsApi.aiGrade(submissionId)
+        if (updated?.aiProposedScore != null) {
+          setAsgScoreById((prev) => ({ ...prev, [submissionId]: String(updated.aiProposedScore) }))
+          setAsgFeedbackById((prev) => ({ ...prev, [submissionId]: updated.aiProposedFeedback || '' }))
+          setAssignmentSubmissions((rows) => rows.map((s: any) => (s.id === submissionId ? { ...s, ...updated } : s)))
+        }
+        setQueueRefresh((n) => n + 1)
+        notify.success('AI grade proposed — review extracted evidence before approving')
+      } catch (e: any) {
+        notify.error(e?.message || 'AI grading failed')
+      }
+      setAsgAiGradingId(null)
+    },
+    [],
+  )
+
+  const approveAssignmentAiGrade = useCallback(
+    async (submissionId: string) => {
+      setGradingAssignment(true)
+      try {
+        const score = Number(asgScoreById[submissionId])
+        await assignmentsApi.approveAiGrade(submissionId, {
+          score: Number.isFinite(score) ? score : undefined,
+          feedback: asgFeedbackById[submissionId] || undefined,
+        })
+        if (selectedAssignmentId) await loadAssignmentSubmissions(selectedAssignmentId)
+        setQueueRefresh((n) => n + 1)
+        notify.success('AI grade approved')
+      } catch (e: any) {
+        notify.error(e?.message || 'Failed to approve AI grade')
       }
       setGradingAssignment(false)
     },
@@ -2625,6 +2891,12 @@ function TutorAssignments({ classes }: { classes: any[] }) {
         title: form.title,
         description: form.description,
         dueDate: form.dueDate,
+        submissionType: form.submissionType,
+        allowedExtensions: parseExtensionList(form.allowedExtensions),
+        maxSizeMB: Number(form.maxSizeMB) || 10,
+        modelAnswer: form.modelAnswer.trim() || undefined,
+        lessonObjective: form.lessonObjective.trim() || undefined,
+        structuredRubric: form.structuredRubric || undefined,
       })
       if (materialFile) {
         const createdRows = Array.isArray(created) ? created : [created]
@@ -2642,6 +2914,12 @@ function TutorAssignments({ classes }: { classes: any[] }) {
         description: '',
         dueDate: '',
         moduleId: '',
+        submissionType: 'mixed',
+        modelAnswer: '',
+        lessonObjective: '',
+        allowedExtensions: '',
+        maxSizeMB: '10',
+        structuredRubric: null,
       })
       setMaterialFile(null)
       await loadAssignments()
@@ -2746,10 +3024,11 @@ function TutorAssignments({ classes }: { classes: any[] }) {
                   </div>
                   {s.fileUrl ? (
                     <div className="text-sm">
-                      <span className="text-muted">File: </span>
-                      <a href={s.fileUrl} target="_blank" rel="noreferrer" className="text-teal">
-                        Open submission
-                      </a>
+                      <span className="text-muted">Evidence: </span>
+                      <SubmissionEvidenceLinks
+                        evidenceUrl={s.fileUrl}
+                        submissionType={selectedAssignment?.submissionType}
+                      />
                     </div>
                   ) : null}
                   {s.textBody ? (
@@ -2757,32 +3036,22 @@ function TutorAssignments({ classes }: { classes: any[] }) {
                       {s.textBody}
                     </div>
                   ) : null}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <label className="form-label">Score (max {selectedAssignment?.maxScore ?? 100})</label>
-                      <input
-                        className="form-input"
-                        inputMode="decimal"
-                        value={asgScoreById[s.id] ?? ''}
-                        onChange={(e) => setAsgScoreById((prev) => ({ ...prev, [s.id]: e.target.value }))}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <label className="form-label">Feedback</label>
-                      <input
-                        className="form-input"
-                        value={asgFeedbackById[s.id] ?? ''}
-                        onChange={(e) => setAsgFeedbackById((prev) => ({ ...prev, [s.id]: e.target.value }))}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => gradeAssignmentSubmission(s.id)} disabled={gradingAssignment}>
-                      Save grade
-                    </button>
-                  </div>
+                  <SubmissionGradingProposal
+                    submission={s}
+                    maxScore={selectedAssignment?.maxScore ?? 100}
+                    scoreValue={asgScoreById[s.id] ?? ''}
+                    feedbackValue={asgFeedbackById[s.id] ?? ''}
+                    onScoreChange={(v) => setAsgScoreById((prev) => ({ ...prev, [s.id]: v }))}
+                    onFeedbackChange={(v) => setAsgFeedbackById((prev) => ({ ...prev, [s.id]: v }))}
+                    onAiGrade={() => runAssignmentAiGrade(s.id)}
+                    onApprove={() => approveAssignmentAiGrade(s.id)}
+                    onSave={() => gradeAssignmentSubmission(s.id)}
+                    aiGradingId={asgAiGradingId}
+                    grading={gradingAssignment}
+                    submissionType={selectedAssignment?.submissionType}
+                    gradingKind="assignment"
+                    previewRefreshKey={queueRefresh}
+                  />
                 </div>
               )
             })}
@@ -2815,6 +3084,19 @@ function TutorAssignments({ classes }: { classes: any[] }) {
           ) : null}
         </div>
       </Modal>
+      <AiReviewQueueCard
+        items={aiReviewItems}
+        onReview={(item) => {
+          if (item.kind === 'assignment') {
+            openAssignmentModal(item.parentId)
+            return
+          }
+          sessionStorage.setItem(PENDING_AI_REVIEW_KEY, JSON.stringify(item))
+          onSection('tutor-practicals')
+        }}
+        onApprove={approveAssignmentFromQueue}
+        approvingId={queueApprovingId}
+      />
       <div className="flex-between mb-20">
         <div>
           <h3 className="font-display fw-700 text-white" style={{ fontSize: 20 }}>Assignments</h3>
@@ -2881,6 +3163,20 @@ function TutorAssignments({ classes }: { classes: any[] }) {
               </select>
             </div>
             <div><label className="form-label">Description</label><textarea required rows={4} className="form-input" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} style={{ resize: 'vertical' }} /></div>
+            <SubmissionTypeFields
+              submissionType={form.submissionType}
+              modelAnswer={form.modelAnswer}
+              lessonObjective={form.lessonObjective}
+              allowedExtensions={form.allowedExtensions}
+              maxSizeMB={form.maxSizeMB}
+              onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+            />
+            <StructuredRubricBuilder
+              submissionType={form.submissionType}
+              maxScore={100}
+              value={form.structuredRubric}
+              onChange={(structuredRubric) => setForm((f) => ({ ...f, structuredRubric }))}
+            />
             <div>
               <label className="form-label">Assignment File (optional)</label>
               <input type="file" onChange={e => setMaterialFile(e.target.files?.[0] || null)} />
@@ -2948,7 +3244,7 @@ function TutorAssignments({ classes }: { classes: any[] }) {
 }
 
 // ─── PRACTICALS ────────────────────────────────────────────────
-function TutorPracticals({ classes }: { classes: any[] }) {
+function TutorPracticals({ classes, onSection }: { classes: any[]; onSection: (s: string) => void }) {
   const [tasks, setTasks] = useState<any[]>([])
   const [loadingTasks, setLoadingTasks] = useState(true)
   const [showNew, setShowNew] = useState(false)
@@ -2959,7 +3255,8 @@ function TutorPracticals({ classes }: { classes: any[] }) {
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
   const [grading, setGrading] = useState(false)
   const [aiGradingId, setAiGradingId] = useState<string | null>(null)
-  const [aiReviewQueue, setAiReviewQueue] = useState<any[]>([])
+  const [queueRefresh, setQueueRefresh] = useState(0)
+  const { items: aiReviewItems } = useUnifiedAiReviewQueue(queueRefresh)
   const [confirm, setConfirm] = useState<null | { title: string; message: React.ReactNode; danger?: boolean; onConfirm: () => void }>(null)
   const [scoreBySubmission, setScoreBySubmission] = useState<Record<string, string>>({})
   const [feedbackBySubmission, setFeedbackBySubmission] = useState<Record<string, string>>({})
@@ -3006,8 +3303,14 @@ function TutorPracticals({ classes }: { classes: any[] }) {
     dueDate: '',
     maxScore: 100,
     passScore: 50,
-    rubricText: '',
+    structuredRubric: null as StructuredRubric | null,
+    submissionType: 'html',
+    modelAnswer: 'Page must include header, nav, main, footer; linked CSS with flex or grid; JS click handler that changes button text.',
+    lessonObjective: 'Build a responsive landing page with semantic HTML and basic interactivity.',
+    allowedExtensions: '.html, .htm, .css, .js, .zip',
+    maxSizeMB: '10',
   })
+  const [queueApprovingId, setQueueApprovingId] = useState<string | null>(null)
 
   const loadTasks = useCallback(async () => {
     setLoadingTasks(true)
@@ -3022,7 +3325,7 @@ function TutorPracticals({ classes }: { classes: any[] }) {
 
   useEffect(() => { loadTasks() }, [loadTasks])
   useEffect(() => {
-    practicalsApi.aiReviewQueue().then((rows) => setAiReviewQueue(Array.isArray(rows) ? rows : [])).catch(() => setAiReviewQueue([]))
+    setQueueRefresh((n) => n + 1)
   }, [tasks.length, submissions.length])
   useEffect(() => {
     if (!trackChoices.length) return
@@ -3100,10 +3403,6 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         setSavingTask(false)
         return
       }
-      let rubric: any = undefined
-      if (form.rubricText.trim()) {
-        try { rubric = JSON.parse(form.rubricText) } catch { notify.warning('Rubric must be valid JSON if provided'); setSavingTask(false); return }
-      }
       await practicalsApi.createTask({
         schoolId,
         className: targetClassNames[0],
@@ -3115,7 +3414,12 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         dueDate: form.dueDate || undefined,
         maxScore: Number(form.maxScore) || 100,
         passScore: Number(form.passScore) || 50,
-        rubric,
+        structuredRubric: form.structuredRubric || undefined,
+        submissionType: form.submissionType,
+        allowedExtensions: parseExtensionList(form.allowedExtensions),
+        maxSizeMB: Number(form.maxSizeMB) || 10,
+        modelAnswer: form.modelAnswer.trim() || undefined,
+        lessonObjective: form.lessonObjective.trim() || undefined,
       })
       setShowNew(false)
       setForm({
@@ -3128,7 +3432,12 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         dueDate: '',
         maxScore: 100,
         passScore: 50,
-        rubricText: '',
+        structuredRubric: null,
+        submissionType: 'html',
+        modelAnswer: 'Page must include header, nav, main, footer; linked CSS with flex or grid; JS click handler that changes button text.',
+        lessonObjective: 'Build a responsive landing page with semantic HTML and basic interactivity.',
+        allowedExtensions: '.html, .htm, .css, .js, .zip',
+        maxSizeMB: '10',
       })
       await loadTasks()
     } catch (e: any) {
@@ -3156,6 +3465,13 @@ function TutorPracticals({ classes }: { classes: any[] }) {
     setLoadingSubmissions(false)
   }
 
+  useEffect(() => {
+    const pending = consumePendingAiReview()
+    if (pending?.kind === 'practical' && pending.parentId) {
+      openTask(pending.parentId)
+    }
+  }, [])
+
   const gradeOne = async (submissionId: string) => {
     const totalScore = Number(scoreBySubmission[submissionId])
     if (!Number.isFinite(totalScore)) {
@@ -3164,10 +3480,14 @@ function TutorPracticals({ classes }: { classes: any[] }) {
     }
     setGrading(true)
     try {
-      await practicalsApi.grade(submissionId, { totalScore, feedback: feedbackBySubmission[submissionId] || '' })
+      const row = submissions.find((s: any) => s.id === submissionId)
+      await practicalsApi.grade(submissionId, {
+        totalScore,
+        feedback: feedbackBySubmission[submissionId] || '',
+        scoreBreakdown: row?.aiScoreBreakdown ?? row?.scoreBreakdown,
+      })
       if (selectedTaskId) await openTask(selectedTaskId)
-      const queue = await practicalsApi.aiReviewQueue().catch(() => [])
-      setAiReviewQueue(Array.isArray(queue) ? queue : [])
+      setQueueRefresh((n) => n + 1)
     } catch (e: any) {
       notify.error(e?.message || 'Failed to grade submission')
     }
@@ -3183,8 +3503,7 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         setFeedbackBySubmission((prev) => ({ ...prev, [submissionId]: updated.aiProposedFeedback || '' }))
         setSubmissions((rows) => rows.map((s: any) => (s.id === submissionId ? { ...s, ...updated } : s)))
       }
-      const queue = await practicalsApi.aiReviewQueue().catch(() => [])
-      setAiReviewQueue(Array.isArray(queue) ? queue : [])
+      setQueueRefresh((n) => n + 1)
       notify.success('AI grade proposed — review and approve or override')
     } catch (e: any) {
       notify.error(e?.message || 'AI grading failed')
@@ -3201,13 +3520,25 @@ function TutorPracticals({ classes }: { classes: any[] }) {
         feedback: feedbackBySubmission[submissionId] || undefined,
       })
       if (selectedTaskId) await openTask(selectedTaskId)
-      const queue = await practicalsApi.aiReviewQueue().catch(() => [])
-      setAiReviewQueue(Array.isArray(queue) ? queue : [])
+      setQueueRefresh((n) => n + 1)
       notify.success('AI grade approved')
     } catch (e: any) {
       notify.error(e?.message || 'Failed to approve AI grade')
     }
     setGrading(false)
+  }
+
+  const approvePracticalFromQueue = async (item: AiReviewItem) => {
+    setQueueApprovingId(item.id)
+    try {
+      await practicalsApi.approveAiGrade(item.id, {})
+      setQueueRefresh((n) => n + 1)
+      if (selectedTaskId && item.parentId === selectedTaskId) await openTask(selectedTaskId)
+      notify.success('AI grade approved')
+    } catch (e: any) {
+      notify.error(e?.message || 'Failed to approve AI grade')
+    }
+    setQueueApprovingId(null)
   }
 
   const toggleSubmission = (id: string) => {
@@ -3228,7 +3559,7 @@ function TutorPracticals({ classes }: { classes: any[] }) {
     }
     setConfirm({
       title: 'Apply bulk score?',
-      message: `Apply this score to ${targetCount} submission(s)?`,
+      message: `Apply this score to ${targetCount} submission(s)? This bypasses AI evidence review — use only when you have checked submissions manually.`,
       onConfirm: async () => {
         setConfirm(null)
         setGrading(true)
@@ -3327,62 +3658,32 @@ function TutorPracticals({ classes }: { classes: any[] }) {
                     </div>
                     <div className="text-sm" style={{ wordBreak: 'break-word' }}>
                       <span className="text-muted">Evidence: </span>
-                      {s.evidenceUrl ? (
-                        <a href={s.evidenceUrl} target="_blank" rel="noreferrer" className="text-teal" style={{ color: 'var(--teal2)' }}>
-                          Open link
-                        </a>
-                      ) : (
-                        '—'
-                      )}
+                      <SubmissionEvidenceLinks
+                        evidenceUrl={s.evidenceUrl}
+                        submissionType={selectedTask?.submissionType}
+                      />
                       {s.evidenceText ? (
                         <div className="text-muted text-xs" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
                           {s.evidenceText}
                         </div>
                       ) : null}
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <div style={{ minWidth: 0 }}>
-                        <label className="form-label">Score</label>
-                        <input
-                          className="form-input"
-                          inputMode="decimal"
-                          value={scoreBySubmission[s.id] ?? ''}
-                          onChange={(e) => setScoreBySubmission((prev) => ({ ...prev, [s.id]: e.target.value }))}
-                          style={{ width: '100%' }}
-                        />
-                      </div>
-                      <div style={{ minWidth: 0 }}>
-                        <label className="form-label">Feedback</label>
-                        <input
-                          className="form-input"
-                          value={feedbackBySubmission[s.id] ?? ''}
-                          onChange={(e) => setFeedbackBySubmission((prev) => ({ ...prev, [s.id]: e.target.value }))}
-                          style={{ width: '100%' }}
-                        />
-                      </div>
-                    </div>
-                    {s.aiProposedScore != null && s.gradedAt == null && (
-                      <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(212,168,83,0.08)', border: '1px solid rgba(212,168,83,0.25)' }}>
-                        <div className="text-xs text-muted mb-4">AI proposal{s.aiConfidence != null ? ` · confidence ${Math.round(s.aiConfidence * 100)}%` : ''}</div>
-                        <div className="text-sm" style={{ color: 'var(--white)' }}>
-                          Score {s.aiProposedScore}/{selectedTask?.maxScore || 100}
-                          {s.aiProposedFeedback && <span className="text-muted"> — {s.aiProposedFeedback}</span>}
-                        </div>
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => runAiGrade(s.id)} disabled={aiGradingId === s.id || grading}>
-                        {aiGradingId === s.id ? 'AI grading…' : 'AI suggest grade'}
-                      </button>
-                      {s.aiProposedScore != null && s.gradedAt == null && (
-                        <button type="button" className="btn btn-success btn-sm" onClick={() => approveAiGrade(s.id)} disabled={grading}>
-                          Approve AI grade
-                        </button>
-                      )}
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => gradeOne(s.id)} disabled={grading}>
-                        Save grade
-                      </button>
-                    </div>
+                    <SubmissionGradingProposal
+                      submission={s}
+                      maxScore={selectedTask?.maxScore ?? 100}
+                      scoreValue={scoreBySubmission[s.id] ?? ''}
+                      feedbackValue={feedbackBySubmission[s.id] ?? ''}
+                      onScoreChange={(v) => setScoreBySubmission((prev) => ({ ...prev, [s.id]: v }))}
+                      onFeedbackChange={(v) => setFeedbackBySubmission((prev) => ({ ...prev, [s.id]: v }))}
+                      onAiGrade={() => runAiGrade(s.id)}
+                      onApprove={() => approveAiGrade(s.id)}
+                      onSave={() => gradeOne(s.id)}
+                      aiGradingId={aiGradingId}
+                      grading={grading}
+                      submissionType={selectedTask?.submissionType}
+                      gradingKind="practical"
+                      previewRefreshKey={queueRefresh}
+                    />
                   </div>
                 )
               })}
@@ -3395,29 +3696,19 @@ function TutorPracticals({ classes }: { classes: any[] }) {
           </>
         )}
       </Modal>
-      {aiReviewQueue.length > 0 && (
-        <div className="card mb-20" style={{ borderColor: 'rgba(212,168,83,0.4)', background: 'rgba(212,168,83,0.06)' }}>
-          <div className="font-display fw-600 text-white mb-6" style={{ fontSize: 15 }}>AI grading review queue</div>
-          <div className="text-muted text-sm mb-10">{aiReviewQueue.length} submission(s) have AI proposals awaiting your approval.</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {aiReviewQueue.slice(0, 5).map((s: any) => {
-              const label = s.student
-                ? `${s.student.user?.firstName || ''} ${s.student.user?.lastName || ''}`.trim()
-                : s.studentId
-              return (
-                <div key={s.id} className="flex-between" style={{ gap: 10, flexWrap: 'wrap' }}>
-                  <span className="text-sm" style={{ color: 'var(--white)' }}>
-                    {s.task?.title} · {label} · AI {s.aiProposedScore}/{s.task?.maxScore || 100}
-                  </span>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.task?.id && openTask(s.task.id)}>
-                    Review →
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
+      <AiReviewQueueCard
+        items={aiReviewItems}
+        onReview={(item) => {
+          if (item.kind === 'practical') {
+            openTask(item.parentId)
+            return
+          }
+          sessionStorage.setItem(PENDING_AI_REVIEW_KEY, JSON.stringify(item))
+          onSection('tutor-assignments')
+        }}
+        onApprove={approvePracticalFromQueue}
+        approvingId={queueApprovingId}
+      />
 
       <div className="flex-between mb-20">
         <div>
@@ -3463,15 +3754,25 @@ function TutorPracticals({ classes }: { classes: any[] }) {
             </div>
             <div><label className="form-label">Description</label><textarea className="form-input" rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} style={{ resize: 'vertical' }} /></div>
             <div><label className="form-label">Instructions</label><textarea className="form-input" rows={3} value={form.instructions} onChange={e => setForm({ ...form, instructions: e.target.value })} style={{ resize: 'vertical' }} /></div>
+            <SubmissionTypeFields
+              submissionType={form.submissionType}
+              modelAnswer={form.modelAnswer}
+              lessonObjective={form.lessonObjective}
+              allowedExtensions={form.allowedExtensions}
+              maxSizeMB={form.maxSizeMB}
+              onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+            />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 120px', gap: 12 }}>
               <div><label className="form-label">Due Date (optional)</label><input type="datetime-local" className="form-input" value={form.dueDate} onChange={e => setForm({ ...form, dueDate: e.target.value })} /></div>
               <div><label className="form-label">Max Score</label><input type="number" className="form-input" min={1} value={form.maxScore} onChange={e => setForm({ ...form, maxScore: +e.target.value })} /></div>
               <div><label className="form-label">Pass Score</label><input type="number" className="form-input" min={0} value={form.passScore} onChange={e => setForm({ ...form, passScore: +e.target.value })} /></div>
             </div>
-            <div>
-              <label className="form-label">Rubric JSON (optional)</label>
-              <textarea className="form-input" rows={3} placeholder='[{"criterion":"Game logic","weight":30}]' value={form.rubricText} onChange={e => setForm({ ...form, rubricText: e.target.value })} style={{ resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }} />
-            </div>
+            <StructuredRubricBuilder
+              submissionType={form.submissionType}
+              maxScore={Number(form.maxScore) || 100}
+              value={form.structuredRubric}
+              onChange={(structuredRubric) => setForm((f) => ({ ...f, structuredRubric }))}
+            />
             <div style={{ display: 'flex', gap: 10 }}>
               <button type="submit" className="btn btn-primary btn-sm" disabled={savingTask}>{savingTask ? 'Saving…' : 'Create Practical Task →'}</button>
               <button type="button" onClick={() => setShowNew(false)} className="btn btn-ghost btn-sm">Cancel</button>
@@ -5207,7 +5508,7 @@ function TutorExamScheduler({ classes }: { classes: any[] }) {
 export default function TutorDashboard() {
   const router = useRouter()
   const [section, setSection] = useState('tutor-dashboard')
-  const [selectedClass, setSelectedClass] = useState<string | null>(null)
+  const [selectedClassKey, setSelectedClassKey] = useState<string | null>(null)
   const [tutor, setTutor] = useState<any>(null)
   const [stats, setStats] = useState<TutorStats | null>(null)
   const [classes, setClasses] = useState<any[]>([])
@@ -5249,6 +5550,7 @@ export default function TutorDashboard() {
     'tutor-lessons': 'Lesson Plans', 'tutor-messages': 'Messages',
     'tutor-cbt': 'CBT Builder', 'tutor-report': 'Weekly Report', 'tutor-settings': 'My profile', 'tutor-sessions': 'Session Log', 'tutor-exam-schedule': 'Schedule Exams',
     'class-insights': 'Class performance',
+    'tutor-leaderboard': 'Leaderboard',
   }
 
   const classPerformanceChoices = useMemo<ClassPerformanceChoice[]>(() => {
@@ -5306,9 +5608,9 @@ export default function TutorDashboard() {
           <TutorStudents
             classes={classes}
             onClassesChange={setClasses}
-            selectedClass={selectedClass}
+            selectedClassKey={selectedClassKey}
             onBackToClasses={() => setSection('tutor-classes')}
-            onClearClass={() => setSelectedClass(null)}
+            onClearClass={() => setSelectedClassKey(null)}
           />
         )
       case 'tutor-classes':
@@ -5316,8 +5618,8 @@ export default function TutorDashboard() {
           <TutorClasses
             classes={classes}
             onClassesChange={setClasses}
-            onOpenClass={(className) => {
-              setSelectedClass(className)
+            onOpenClass={(assignmentKey) => {
+              setSelectedClassKey(assignmentKey)
               setSection('tutor-students')
             }}
           />
@@ -5333,8 +5635,8 @@ export default function TutorDashboard() {
             }}
           />
         )
-      case 'tutor-assignments': return <TutorAssignments classes={classes} />
-      case 'tutor-practicals': return <TutorPracticals classes={classes} />
+      case 'tutor-assignments': return <TutorAssignments classes={classes} onSection={setSection} />
+      case 'tutor-practicals': return <TutorPracticals classes={classes} onSection={setSection} />
       case 'tutor-lessons': return <LessonPlans classes={classes} />
       case 'tutor-messages': return <TutorMessages classes={classes} />
       case 'tutor-cbt': return <CBTBuilder classes={classes} />
@@ -5350,6 +5652,17 @@ export default function TutorDashboard() {
       )
       case 'tutor-sessions': return <SessionLogger classes={classes} />
       case 'tutor-exam-schedule': return <TutorExamScheduler classes={classes} />
+      case 'tutor-leaderboard': {
+        const leaderboardClass = selectedClassKey
+          ? classes.find((c: any) => tutorAssignmentKey(c) === selectedClassKey)
+          : null
+        return (
+          <LeaderboardPage
+            role="tutor"
+            classLabel={leaderboardClass ? tutorAssignmentLabel(leaderboardClass) : undefined}
+          />
+        )
+      }
       case 'class-insights':
         return (
           <div>

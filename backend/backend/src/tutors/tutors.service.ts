@@ -442,6 +442,18 @@ export class TutorsService {
    *   with a **different** `termLabel` are ended (`isActive: false`) so the tutor dashboard shows the current term.
    * - Historical student data (module progress, attendance, etc.) is not deleted.
    */
+  /** Tutors are deployed to one school at a time — pick the school with the most active class assignments. */
+  private async resolveTutorSchoolId(tutorId: string): Promise<string | null> {
+    const groups = await this.prisma.tutorAssignment.groupBy({
+      by: ['schoolId'],
+      where: { tutorId, isActive: true },
+      _count: { _all: true },
+    });
+    if (!groups.length) return null;
+    groups.sort((a, b) => b._count._all - a._count._all);
+    return groups[0].schoolId;
+  }
+
   async assignToSchool(
     tutorId: string,
     schoolId: string,
@@ -458,6 +470,17 @@ export class TutorsService {
     },
   ) {
     const termLabel = await this.resolveAssignmentTermLabel(schoolId, data.termLabel);
+
+    const otherSchoolAssignment = await this.prisma.tutorAssignment.findFirst({
+      where: { tutorId, isActive: true, schoolId: { not: schoolId } },
+      include: { school: { select: { name: true } } },
+    });
+    if (otherSchoolAssignment) {
+      const schoolName = otherSchoolAssignment.school?.name || 'another school';
+      throw new BadRequestException(
+        `This tutor is already assigned to ${schoolName}. End that placement before assigning them to a different school.`,
+      );
+    }
 
     const expectedSessionsPerWeek = Math.min(
       14,
@@ -587,18 +610,24 @@ export class TutorsService {
   // Tutor dashboard stats
   async getTutorStats(tutorId: string) {
     const tutor = await this.prisma.tutor.findUnique({ where: { id: tutorId } });
-    const [assignments, reports, pendingReports, cbtExams] = await Promise.all([
-      this.prisma.tutorAssignment.count({ where: { tutorId, isActive: true } }),
+    const tutorSchoolId = await this.resolveTutorSchoolId(tutorId);
+    const assignmentWhere = {
+      tutorId,
+      isActive: true,
+      ...(tutorSchoolId ? { schoolId: tutorSchoolId } : {}),
+    };
+    const [activeSchools, reports, pendingReports, cbtExams] = await Promise.all([
+      this.prisma.tutorAssignment.groupBy({
+        by: ['schoolId'],
+        where: assignmentWhere,
+      }).then((rows) => rows.length),
       this.prisma.weeklyReport.count({ where: { tutorId, status: 'SUBMITTED' } }),
       this.prisma.weeklyReport.count({ where: { tutorId, status: 'DRAFT' } }),
       this.prisma.cBTExam.count({ where: { tutorId } }),
     ]);
 
-    // Total students across assigned classes (not per-school).
-    // The previous implementation summed the school's total students once per assignment,
-    // which over-counts when a tutor has multiple class assignments in the same school.
     const activeAssignments = await this.prisma.tutorAssignment.findMany({
-      where: { tutorId, isActive: true },
+      where: assignmentWhere,
       select: { schoolId: true, className: true },
     });
     const uniqClasses = new Map<string, { schoolId: string; className: string }>();
@@ -615,15 +644,20 @@ export class TutorsService {
     );
     const totalStudents = counts.reduce((sum, n) => sum + n, 0);
 
-    return { activeSchools: assignments, submittedReports: reports, pendingReports, cbtExams, totalStudents, rating: tutor.rating };
+    return { activeSchools, submittedReports: reports, pendingReports, cbtExams, totalStudents, rating: tutor.rating };
   }
 
   // Classes taught by tutor
   async getTutorClasses(tutorId: string) {
     const { weekStart, weekEnd } = TutorsService.utcWeekBounds();
+    const tutorSchoolId = await this.resolveTutorSchoolId(tutorId);
 
     const assignments = await this.prisma.tutorAssignment.findMany({
-      where: { tutorId, isActive: true },
+      where: {
+        tutorId,
+        isActive: true,
+        ...(tutorSchoolId ? { schoolId: tutorSchoolId } : {}),
+      },
       include: { school: true },
     });
 

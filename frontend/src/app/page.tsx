@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { HomeServicesCarousel } from '@/components/HomeServicesCarousel'
 import { MarketingNav } from '@/components/MarketingNav'
+import { HomePageLoader } from '@/components/home/HomePageLoader'
 
 const HERO_SLIDES = [
   { src: '/hero/slide-1.png', alt: 'Two students collaborating on a laptop in a school library' },
@@ -14,6 +15,7 @@ const HERO_SLIDES = [
 
 export default function HomePage() {
   const [heroImageIndex, setHeroImageIndex] = useState(0)
+  const [siteReady, setSiteReady] = useState(false)
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -23,7 +25,13 @@ export default function HomePage() {
   }, [])
 
   return (
-    <div id="page-home" className="page active" style={{display:'block'}}>
+    <>
+      {!siteReady && <HomePageLoader onDismiss={() => setSiteReady(true)} />}
+      <div
+        id="page-home"
+        className={`page active${siteReady ? ' hl-site-visible' : ' hl-site-hidden'}`}
+        style={{ display: 'block' }}
+      >
 
       <MarketingNav />
 
@@ -331,6 +339,7 @@ export default function HomePage() {
           <p>Built for Nigerian Schools 🇳🇬 &nbsp;·&nbsp; <a href="#" style={{color:'var(--gold)',textDecoration:'none'}}>info@adharaedu.com</a></p>
         </div>
       </footer>
-    </div>
+      </div>
+    </>
   )
 }

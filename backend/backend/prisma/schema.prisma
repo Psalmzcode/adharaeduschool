@@ -398,8 +398,75 @@ model Student {
 
   certificates        Certificate[]
   assignmentSubs      ClassAssignmentSubmission[] @relation("StudentAssignmentSubmissions")
+  lessonQuizAttempts  LessonMicroQuizAttempt[]
+  typingAttempts      TypingAttempt[]
 
   @@map("students")
+}
+
+model TypingAttempt {
+  id              String   @id @default(cuid())
+  studentId       String
+  moduleId        String
+  /// practice | formal_test
+  kind            String
+  /// home_row | words | sentences | formal
+  drillKey        String
+  wpm             Float
+  accuracy        Float
+  correctChars    Int
+  errorCount      Int
+  durationSec     Int
+  /// Meets minimum length + accuracy rules for formal scoring
+  isValidScore    Boolean  @default(true)
+  /// Mistake categories for AI / rule-based coaching feedback
+  errorProfile    Json?
+  submittedAt     DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  module  Module  @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, moduleId, kind])
+  @@index([moduleId, submittedAt])
+  @@map("typing_attempts")
+}
+
+model LessonMicroQuiz {
+  id                 String   @id @default(cuid())
+  tutorId            String
+  schoolId           String
+  className          String
+  moduleId           String
+  curriculumLessonId String
+  title              String?
+  /// [{ questionText, options: string[], correctIndex: number }]
+  questions          Json
+  isEnabled          Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  lesson   CurriculumLesson @relation(fields: [curriculumLessonId], references: [id], onDelete: Cascade)
+  attempts LessonMicroQuizAttempt[]
+
+  @@unique([schoolId, className, curriculumLessonId])
+  @@index([moduleId, schoolId, className])
+  @@map("lesson_micro_quizzes")
+}
+
+model LessonMicroQuizAttempt {
+  id          String   @id @default(cuid())
+  quizId      String
+  studentId   String
+  score       Float
+  answers     Json?
+  submittedAt DateTime @default(now())
+
+  quiz    LessonMicroQuiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  student Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([quizId, studentId])
+  @@index([studentId])
+  @@map("lesson_micro_quiz_attempts")
 }
 
 // ─────────────────────────────────────────────
@@ -449,6 +516,7 @@ model Module {
   practicalTasks PracticalTask[]
   sessionLogs SessionLog[]
   curriculumLessons CurriculumLesson[]
+  typingAttempts TypingAttempt[]
 
   @@unique([track, number, stackVariant])
   @@map("modules")
@@ -479,6 +547,8 @@ model CurriculumLesson {
   studentProgress       StudentLessonProgress[]
   classStatesAsCurrent  ClassCurriculumState[] @relation("ClassCurrentLesson")
   classStatesAsLastDelivered ClassCurriculumState[] @relation("ClassLastDeliveredLesson")
+  microQuizzes          LessonMicroQuiz[]
+  lessonAssignments     ClassAssignment[] @relation("LessonPracticeAssignments")
 
   @@unique([moduleId, position])
   @@index([moduleId])
@@ -1111,13 +1181,25 @@ model ClassAssignment {
   dueDate      DateTime
   attachmentUrl String?
   maxScore     Int      @default(100)
+  submissionType   String   @default("mixed")
+  allowedExtensions Json?
+  maxSizeMB        Int      @default(10)
+  structuredRubric Json?
+  modelAnswer      String?  @db.Text
+  lessonObjective  String?
+  /// general | lesson_practice
+  assignmentKind       String   @default("general")
+  curriculumLessonId   String?
+  isOptional           Boolean  @default(false)
   isPublished  Boolean  @default(true)
   createdAt    DateTime @default(now())
 
   tutor         User                       @relation("TutorAssignments", fields: [tutorId], references: [id])
   school        School                     @relation(fields: [schoolId], references: [id])
+  curriculumLesson CurriculumLesson?       @relation("LessonPracticeAssignments", fields: [curriculumLessonId], references: [id], onDelete: SetNull)
   submissions   ClassAssignmentSubmission[]
 
+  @@index([moduleId, curriculumLessonId, assignmentKind])
   @@map("class_assignments")
 }
 
@@ -1132,6 +1214,21 @@ model ClassAssignmentSubmission {
   score          Float?
   feedback       String?
   status         String   @default("SUBMITTED")  // SUBMITTED | GRADED | LATE
+  extractedEvidence   Json?
+  extractionStatus    String   @default("pending")
+  extractionError     String?
+  extractedAt         DateTime?
+  ruleEngineResult    Json?
+  automatedScore      Float?
+  aiScore             Float?
+  aiProposedScore     Float?
+  aiProposedFeedback  String?
+  aiScoreBreakdown    Json?
+  aiConfidence        Float?
+  aiGradedAt          DateTime?
+  manualReviewRequired Boolean @default(false)
+  gradingProvider     String?
+  gradingModelUsed    String?
   submittedAt    DateTime @default(now())
   gradedAt       DateTime?
 
@@ -1155,6 +1252,13 @@ model PracticalTask {
   maxScore     Int      @default(100)
   passScore    Float    @default(50)
   rubric       Json?
+  /// word | excel | html | zip | scratch | image | mixed
+  submissionType   String   @default("mixed")
+  allowedExtensions Json?
+  maxSizeMB        Int      @default(10)
+  structuredRubric Json?
+  modelAnswer      String?  @db.Text
+  lessonObjective  String?
   isPublished  Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -1185,6 +1289,16 @@ model PracticalSubmission {
   aiScoreBreakdown    Json?
   aiConfidence        Float?
   aiGradedAt          DateTime?
+  extractedEvidence   Json?
+  extractionStatus    String   @default("pending")
+  extractionError     String?
+  extractedAt         DateTime?
+  ruleEngineResult    Json?
+  automatedScore      Float?
+  aiScore             Float?
+  manualReviewRequired Boolean @default(false)
+  gradingProvider     String?
+  gradingModelUsed    String?
   submittedAt    DateTime @default(now())
   gradedAt       DateTime?
   gradedBy       String?

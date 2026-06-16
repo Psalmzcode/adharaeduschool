@@ -1,17 +1,25 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { assertPracticalGradingAccess } from './practical-access.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { resolveModuleRef } from '../common/module-content';
 import { AcademicAuditService, AuditActor } from '../academic-audit/academic-audit.service';
 import { AcademicAuditAction } from '@prisma/client';
-import { geminiGenerateJson } from '../common/gemini-json.client';
+import { GradingOrchestratorService } from '../evidence-grading/grading-orchestrator.service';
+import { SubmissionEvidenceService } from '../evidence-grading/submission-evidence.service';
+import { SubmissionGradingHelperService } from '../evidence-grading/submission-grading-helper.service';
+import { UploadValidationService } from '../evidence-grading/validation/upload-validation.service';
 
 @Injectable()
 export class PracticalsService {
+  private readonly logger = new Logger(PracticalsService.name);
+
   constructor(
     private prisma: PrismaService,
     private audit: AcademicAuditService,
-    private config: ConfigService,
+    private orchestrator: GradingOrchestratorService,
+    private evidenceService: SubmissionEvidenceService,
+    private uploadValidation: UploadValidationService,
+    private gradingHelper: SubmissionGradingHelperService,
   ) {}
 
   async createTask(tutorUserId: string, data: any) {
@@ -38,6 +46,12 @@ export class PracticalsService {
           maxScore: Number(data.maxScore) > 0 ? Number(data.maxScore) : 100,
           passScore: Number.isFinite(Number(data.passScore)) ? Number(data.passScore) : 50,
           rubric: data.rubric ?? null,
+          submissionType: data.submissionType ? String(data.submissionType) : 'mixed',
+          allowedExtensions: data.allowedExtensions ?? null,
+          maxSizeMB: Number(data.maxSizeMB) > 0 ? Number(data.maxSizeMB) : 10,
+          structuredRubric: data.structuredRubric ?? null,
+          modelAnswer: data.modelAnswer ? String(data.modelAnswer) : null,
+          lessonObjective: data.lessonObjective ? String(data.lessonObjective) : null,
           isPublished: data.isPublished !== false,
         },
       });
@@ -134,22 +148,68 @@ export class PracticalsService {
       select: { attempt: true },
     });
     const attempt = (last?.attempt || 0) + 1;
-    return this.prisma.practicalSubmission.create({
+
+    const evidenceUrl = data.evidenceUrl?.trim() || undefined;
+    if (evidenceUrl) {
+      this.uploadValidation.assertValidOrThrow({
+        url: evidenceUrl,
+        allowedExtensions: Array.isArray(task.allowedExtensions) ? (task.allowedExtensions as string[]) : null,
+        submissionType: task.submissionType,
+      });
+    }
+    if (!evidenceUrl && !data.evidenceText?.trim()) {
+      throw new BadRequestException('Submit evidence text and/or upload a file');
+    }
+
+    const submission = await this.prisma.practicalSubmission.create({
       data: {
         taskId,
         studentId: student.id,
         attempt,
         termLabel: student.termLabel || null,
-        evidenceUrl: data.evidenceUrl,
+        evidenceUrl,
         evidenceText: data.evidenceText,
         status: isLate ? 'LATE' : 'SUBMITTED',
+        extractionStatus: 'pending',
       },
+    });
+
+    void this.runBackgroundExtraction(submission.id).catch((err) => {
+      this.logger.warn(
+        `Background extraction failed for practical submission ${submission.id}: ${err?.message || err}`,
+      );
+    });
+    return submission;
+  }
+
+  private async runBackgroundExtraction(submissionId: string) {
+    const submission = await this.prisma.practicalSubmission.findUnique({
+      where: { id: submissionId },
+      include: { task: true },
+    });
+    if (!submission) return;
+
+    const { evidence, status, error } = await this.orchestrator.extractOnly({
+      evidenceUrl: submission.evidenceUrl,
+      evidenceText: submission.evidenceText,
+      submissionType: submission.task.submissionType,
+      allowedExtensions: Array.isArray(submission.task.allowedExtensions)
+        ? (submission.task.allowedExtensions as string[])
+        : null,
+      maxSizeMB: submission.task.maxSizeMB,
+      lessonObjective: submission.task.lessonObjective,
+    });
+
+    await this.prisma.practicalSubmission.update({
+      where: { id: submissionId },
+      data: this.gradingHelper.extractionPersistData(evidence, status, error),
     });
   }
 
-  async listSubmissions(taskId: string) {
+  async listSubmissions(taskId: string, actorUserId: string, actorRole?: string) {
     const task = await this.prisma.practicalTask.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Practical task not found');
+    await assertPracticalGradingAccess(this.prisma, task, actorUserId, actorRole);
 
     const submissions = await this.prisma.practicalSubmission.findMany({
       where: { taskId },
@@ -180,6 +240,7 @@ export class PracticalsService {
       include: { task: true },
     });
     if (!submission) throw new NotFoundException('Practical submission not found');
+    await assertPracticalGradingAccess(this.prisma, submission.task, graderUserId, actorRole);
 
     const totalScore = Number(data.totalScore);
     if (!Number.isFinite(totalScore)) throw new BadRequestException('totalScore must be a number');
@@ -192,12 +253,18 @@ export class PracticalsService {
     });
     const studentName = `${student?.user?.firstName || ''} ${student?.user?.lastName || ''}`.trim() || 'Student';
 
+    const scoreBreakdown =
+      data.scoreBreakdown ??
+      submission.aiScoreBreakdown ??
+      submission.scoreBreakdown ??
+      null;
+
     const updated = await this.prisma.practicalSubmission.update({
       where: { id: submissionId },
       data: {
         totalScore: boundedScore,
         feedback: data.feedback ? String(data.feedback) : null,
-        scoreBreakdown: data.scoreBreakdown ?? null,
+        scoreBreakdown,
         status,
         gradedAt: new Date(),
         gradedBy: graderUserId,
@@ -221,6 +288,7 @@ export class PracticalsService {
   async bulkGrade(taskId: string, graderUserId: string, data: { submissionIds?: string[]; totalScore: number; feedback?: string; scoreBreakdown?: any }, actorRole?: string) {
     const task = await this.prisma.practicalTask.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Practical task not found');
+    await assertPracticalGradingAccess(this.prisma, task, graderUserId, actorRole);
 
     const totalScore = Number(data.totalScore);
     if (!Number.isFinite(totalScore)) throw new BadRequestException('totalScore must be a number');
@@ -268,7 +336,7 @@ export class PracticalsService {
     return { updated: targets.length };
   }
 
-  /** Gemini proposes a score from rubric + evidence; tutor approves or overrides. */
+  /** Evidence pipeline + AI proposal; tutor must approve before grade is final. */
   async proposeAiGrade(submissionId: string, tutorUserId: string) {
     const submission = await this.prisma.practicalSubmission.findUnique({
       where: { id: submissionId },
@@ -279,59 +347,44 @@ export class PracticalsService {
       },
     });
     if (!submission) throw new NotFoundException('Practical submission not found');
-    if (!submission.evidenceText?.trim() && !submission.evidenceUrl?.trim()) {
+    await assertPracticalGradingAccess(this.prisma, submission.task, tutorUserId, 'TUTOR');
+    const hasSource =
+      Boolean(submission.evidenceText?.trim() || submission.evidenceUrl?.trim()) ||
+      this.gradingHelper.submissionHasGradeableSource(submission);
+    if (!hasSource) {
       throw new BadRequestException('Submission has no evidence to grade');
     }
 
-    const maxScore = submission.task.maxScore || 100;
-    const passScore = submission.task.passScore ?? 50;
-    const rubric = submission.task.rubric ?? null;
-
-    const prompt = [
-      `You are grading a secondary-school ICT practical submission.`,
-      `Return ONLY valid JSON:`,
-      `{"totalScore":number,"feedback":string,"scoreBreakdown":object,"confidence":number}`,
-      ``,
-      `Rules:`,
-      `- totalScore is 0–${maxScore} (pass mark ${passScore}).`,
-      `- feedback: 2–4 sentences, constructive, specific to the evidence.`,
-      `- scoreBreakdown: object keyed by rubric criterion or skill area with partial scores.`,
-      `- confidence: 0–1 how sure you are (lower if evidence is vague or only a URL with no description).`,
-      `- Be fair but rigorous; incomplete work should score below pass.`,
-      ``,
-      `Task: ${submission.task.title}`,
-      `Instructions: ${submission.task.instructions || submission.task.description || '—'}`,
-      `Rubric: ${rubric ? JSON.stringify(rubric) : 'General quality, completeness, correctness'}`,
-      `Evidence URL: ${submission.evidenceUrl || '—'}`,
-      `Evidence text: ${submission.evidenceText || '—'}`,
-    ].join('\n');
-
-    const { jsonText } = await geminiGenerateJson(this.config, prompt, { temperature: 0.2 });
-    let parsed: any;
-    try {
-      parsed = JSON.parse(jsonText);
-    } catch {
-      throw new BadRequestException('AI returned invalid JSON for practical grade');
-    }
-
-    const proposed = Number(parsed?.totalScore);
-    if (!Number.isFinite(proposed)) throw new BadRequestException('AI did not return a valid score');
-    const bounded = Math.max(0, Math.min(maxScore, proposed));
-    const feedback = String(parsed?.feedback || '').trim() || 'AI grading complete — please review.';
-    const scoreBreakdown = parsed?.scoreBreakdown && typeof parsed.scoreBreakdown === 'object' ? parsed.scoreBreakdown : null;
-    const confidence = Number(parsed?.confidence);
-    const aiConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : null;
+    const { evidence, status, error, proposal } = await this.gradingHelper.extractAndPropose(
+      submission.task,
+      submission,
+    );
 
     return this.prisma.practicalSubmission.update({
       where: { id: submissionId },
-      data: {
-        aiProposedScore: bounded,
-        aiProposedFeedback: feedback,
-        aiScoreBreakdown: scoreBreakdown,
-        aiConfidence,
-        aiGradedAt: new Date(),
+      data: this.gradingHelper.proposalPersistData(proposal, evidence, status, error),
+    });
+  }
+
+  async getGradingPreview(submissionId: string, actorUserId: string, actorRole?: string) {
+    const submission = await this.prisma.practicalSubmission.findUnique({
+      where: { id: submissionId },
+      include: {
+        task: {
+          select: {
+            id: true,
+            title: true,
+            maxScore: true,
+            submissionType: true,
+            tutorId: true,
+            schoolId: true,
+          },
+        },
       },
     });
+    if (!submission) throw new NotFoundException('Practical submission not found');
+    await assertPracticalGradingAccess(this.prisma, submission.task, actorUserId, actorRole);
+    return this.gradingHelper.gradingPreviewPayload(submission, submission.task);
   }
 
   /** Apply AI proposal as the official grade (tutor may override score/feedback in body). */
@@ -341,11 +394,18 @@ export class PracticalsService {
     data?: { totalScore?: number; feedback?: string },
     actorRole?: string,
   ) {
-    const submission = await this.prisma.practicalSubmission.findUnique({ where: { id: submissionId } });
+    const submission = await this.prisma.practicalSubmission.findUnique({
+      where: { id: submissionId },
+      include: { task: { select: { tutorId: true, schoolId: true, submissionType: true } } },
+    });
     if (!submission) throw new NotFoundException('Practical submission not found');
+    await assertPracticalGradingAccess(this.prisma, submission.task, graderUserId, actorRole);
     if (submission.aiProposedScore == null) {
       throw new BadRequestException('No AI grade proposal on this submission — run AI grade first');
     }
+
+    this.gradingHelper.assertCanApproveAi(submission, submission.task.submissionType);
+
     return this.gradeSubmission(
       submissionId,
       graderUserId,
@@ -372,7 +432,7 @@ export class PracticalsService {
         aiProposedScore: { not: null },
         gradedAt: null,
       },
-      orderBy: { aiGradedAt: 'desc' },
+      orderBy: [{ manualReviewRequired: 'desc' }, { aiConfidence: 'asc' }, { aiGradedAt: 'desc' }],
       include: {
         task: { select: { id: true, title: true, className: true, maxScore: true } },
       },
@@ -386,6 +446,12 @@ export class PracticalsService {
     return submissions.map((s) => ({
       ...s,
       student: studentMap.get(s.studentId) || null,
+      canAutoApprove:
+        s.extractionStatus === 'ok' &&
+        s.aiProposedScore != null &&
+        !s.gradedAt &&
+        !s.manualReviewRequired &&
+        (s.aiConfidence ?? 0) >= 0.6,
     }));
   }
 }

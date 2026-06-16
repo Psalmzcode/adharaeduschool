@@ -36,6 +36,9 @@ import { RemindersModule } from './reminders/reminders.module';
 import { SchoolTermsModule } from './school-terms/school-terms.module';
 import { AcademicAuditModule } from './academic-audit/academic-audit.module';
 import { TutorAttendanceModule } from './tutor-attendance/tutor-attendance.module';
+import { EvidenceGradingModule } from './evidence-grading/evidence-grading.module';
+import { TypingModule } from './typing/typing.module';
+import { LeaderboardsModule } from './leaderboards/leaderboards.module';
 
 @Module({
   imports: [
@@ -58,6 +61,9 @@ import { TutorAttendanceModule } from './tutor-attendance/tutor-attendance.modul
     SchoolTermsModule,
     AcademicAuditModule,
     TutorAttendanceModule,
+    EvidenceGradingModule,
+    TypingModule,
+    LeaderboardsModule,
   ],
 })
 export class AppModule {}

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useTheme } from '@/lib/theme'
+import { useTheme } from '@/lib/theme-provider'
 
 function LogoLink() {
   return (

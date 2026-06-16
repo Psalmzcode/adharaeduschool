@@ -5,9 +5,16 @@ import {
   AttendanceStatus,
   AssignmentStatus,
   ExamStatus,
+  ModuleType,
   TutorIdentificationType,
 } from '@prisma/client';
 import * as argon2 from '@node-rs/argon2';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as QRCode from 'qrcode';
+import { seedEvidenceTypeDemos } from './seed-evidence-demos';
+import { seedAssignmentEvidenceDemos } from './seed-assignment-evidence-demos';
+import { extractFromHtmlSources } from '../src/evidence-grading/extractors/html.extractor';
 
 const prisma = new PrismaClient();
 
@@ -25,8 +32,82 @@ const Track3Stack = {
 } as const;
 
 /** Stored in School.notes — parsed by school-classes API for admin/tutor class pickers. */
-const DEMO_CLASS_REGISTRY_JSON = JSON.stringify([{ className: 'SS3A', track: TrackLevel.TRACK_3 }]);
-const DEMO_SCHOOL_NOTES = `Demo registry for Class performance (Phase D) + school-classes list.\n[[ADHARA_CLASSES_JSON]]${DEMO_CLASS_REGISTRY_JSON}`;
+const CROWN_HEIGHTS_CLASSES_JSON = JSON.stringify([
+  { className: 'SS3A', track: TrackLevel.TRACK_3 },
+  { className: 'SS1A', track: TrackLevel.TRACK_1 },
+  { className: 'SS1B', track: TrackLevel.TRACK_1 },
+]);
+const LAKESIDE_CLASSES_JSON = JSON.stringify([{ className: 'SS3B', track: TrackLevel.TRACK_3 }]);
+const crownHeightsSchoolNotes = `In-progress Track 3 demo (pass / fail / in-progress).\n[[ADHARA_CLASSES_JSON]]${CROWN_HEIGHTS_CLASSES_JSON}`;
+const lakesideSchoolNotes = `Graduated Track 3 demo (certificate download + superadmin issue flow).\n[[ADHARA_CLASSES_JSON]]${LAKESIDE_CLASSES_JSON}`;
+
+type ProgressRow = { score: number | null; status: string };
+
+function studentPasswordFromReg(regNumber: string) {
+  const suffix = regNumber.split('/').pop() || '000';
+  return `student@${suffix}`;
+}
+
+async function upsertStudentModuleProgress(
+  studentId: string,
+  modules: { id: string }[],
+  rows: ProgressRow[],
+) {
+  for (let i = 0; i < modules.length; i++) {
+    const row = rows[i] || { score: null, status: 'LOCKED' };
+    const completedAt = row.status === 'COMPLETED' ? new Date() : null;
+    await prisma.moduleProgress.upsert({
+      where: { studentId_moduleId: { studentId, moduleId: modules[i].id } },
+      update: { status: row.status as any, score: row.score, completedAt },
+      create: {
+        studentId,
+        moduleId: modules[i].id,
+        status: row.status as any,
+        score: row.score,
+        completedAt,
+      },
+    });
+  }
+}
+
+/** Writes a downloadable PDF to frontend/public — branded PDFs use Superadmin Issue (API + pdfmake). */
+async function issueDemoCertificateLocal(opts: {
+  studentId: string;
+  track: TrackLevel;
+  serialNumber: string;
+  averageScore: number;
+}) {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const verifyUrl = `${frontendUrl}/verify-certificate/${opts.serialNumber}`;
+  const qrDataUrl = await QRCode.toDataURL(verifyUrl, { width: 150, margin: 1 });
+  const outDir = path.join(__dirname, '../../../frontend/public/demo-certificates');
+  fs.mkdirSync(outDir, { recursive: true });
+  const filename = `${opts.serialNumber}.pdf`;
+  const filePath = path.join(outDir, filename);
+  if (!fs.existsSync(filePath)) {
+    const res = await fetch('https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf');
+    fs.writeFileSync(filePath, Buffer.from(await res.arrayBuffer()));
+  }
+  const pdfUrl = `${frontendUrl}/demo-certificates/${filename}`;
+  return prisma.certificate.upsert({
+    where: { serialNumber: opts.serialNumber },
+    update: {
+      pdfUrl,
+      qrCode: qrDataUrl,
+      averageScore: opts.averageScore,
+      isRevoked: false,
+    },
+    create: {
+      studentId: opts.studentId,
+      track: opts.track,
+      serialNumber: opts.serialNumber,
+      averageScore: opts.averageScore,
+      pdfUrl,
+      qrCode: qrDataUrl,
+      isRevoked: false,
+    },
+  });
+}
 
 async function hasColumn(tableName: string, columnName: string): Promise<boolean> {
   const rows = await prisma.$queryRaw<
@@ -677,11 +758,11 @@ async function main() {
       quickCheck: ['Typing test — record WPM + accuracy.'],
     });
     await upsertCurriculumLesson(mod2.id, 7, {
-      title: 'Module 2 Review + Typing Test Week 1',
-      objective: 'Consolidate Module 2; first official typing speed test for the tracker.',
+      title: 'Module 2 Review + Official Typing Assessment',
+      objective: 'Consolidate Module 2; complete the official typing speed test when your tutor assigns it.',
       handbook: 'Section 2.8',
-      lab: 'Full quick check + first official typing speed test. Record in Weekly Typing Speed Tracker.',
-      exercises: ['Module 2 review tasks.', 'Official Week 1 typing test.'],
+      lab: 'Full quick check + official typing speed test. Record in Weekly Typing Speed Tracker.',
+      exercises: ['Module 2 review tasks.', 'Official typing assessment.'],
       quickCheck: ['Combined review + typing result recorded.'],
     });
   }
@@ -712,7 +793,7 @@ async function main() {
 
   /** Typed via assertion so seed compiles even if the IDE uses a stale generated client — run `pnpm prisma generate` after schema changes. */
   const crownDemoSchoolUpdate = {
-    notes: DEMO_SCHOOL_NOTES,
+    notes: crownHeightsSchoolNotes,
     enrolledTracks: [TrackLevel.TRACK_1, TrackLevel.TRACK_2, TrackLevel.TRACK_3],
     officialName: 'Crown Heights Secondary School',
     schoolType: 'SECONDARY' as const,
@@ -744,7 +825,7 @@ async function main() {
     status: 'APPROVED' as const,
     enrolledTracks: [TrackLevel.TRACK_1, TrackLevel.TRACK_2, TrackLevel.TRACK_3],
     feesPerStudent: 8000,
-    notes: DEMO_SCHOOL_NOTES,
+    notes: crownHeightsSchoolNotes,
     profileCompletedAt: new Date(),
     admins: { connect: { id: schoolAdmin.id } },
   } as unknown as Prisma.SchoolCreateInput;
@@ -779,6 +860,7 @@ async function main() {
   const tutor = await prisma.tutor.upsert({
     where: { userId: tutorUser.id },
     update: {
+      tracks: [TrackLevel.TRACK_1, TrackLevel.TRACK_2, TrackLevel.TRACK_3],
       onboardingStatus: 'COMPLETE',
       passportPhotoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/seed/tutor-passport.jpg',
       identificationType: TutorIdentificationType.NIN,
@@ -801,7 +883,7 @@ async function main() {
       userId: tutorUser.id,
       bio: 'Frontend developer with 5 years experience. Passionate about teaching young Nigerians to code.',
       specializations: ['HTML/CSS', 'JavaScript', 'Python', 'React'],
-      tracks: [TrackLevel.TRACK_2, TrackLevel.TRACK_3],
+      tracks: [TrackLevel.TRACK_1, TrackLevel.TRACK_2, TrackLevel.TRACK_3],
       isVerified: true,
       rating: 4.8,
       onboardingStatus: 'COMPLETE',
@@ -837,6 +919,42 @@ async function main() {
       isActive: true,
       startDate: new Date('2026-01-06'),
       track3Stack: Track3Stack.PYTHON_FLASK,
+    } as unknown as Prisma.TutorAssignmentCreateInput,
+  });
+  await prisma.tutorAssignment.upsert({
+    where: { id: 'demo-assignment-ss1a-track1' },
+    update: {
+      termLabel: '2025/2026 Term 2',
+      isActive: true,
+      track: TrackLevel.TRACK_1,
+    } as Prisma.TutorAssignmentUpdateInput,
+    create: {
+      id: 'demo-assignment-ss1a-track1',
+      tutorId: tutor.id,
+      schoolId: school.id,
+      track: TrackLevel.TRACK_1,
+      className: 'SS1A',
+      termLabel: '2025/2026 Term 2',
+      isActive: true,
+      startDate: new Date('2026-01-06'),
+    } as unknown as Prisma.TutorAssignmentCreateInput,
+  });
+  await prisma.tutorAssignment.upsert({
+    where: { id: 'demo-assignment-ss1b-track1' },
+    update: {
+      termLabel: '2025/2026 Term 2',
+      isActive: true,
+      track: TrackLevel.TRACK_1,
+    } as Prisma.TutorAssignmentUpdateInput,
+    create: {
+      id: 'demo-assignment-ss1b-track1',
+      tutorId: tutor.id,
+      schoolId: school.id,
+      track: TrackLevel.TRACK_1,
+      className: 'SS1B',
+      termLabel: '2025/2026 Term 2',
+      isActive: true,
+      startDate: new Date('2026-01-06'),
     } as unknown as Prisma.TutorAssignmentCreateInput,
   });
   console.log('✅ Demo tutor created and assigned');
@@ -917,10 +1035,11 @@ async function main() {
     } as unknown as Prisma.StudentCreateInput,
   });
 
-  // Set module progress for demo students (Phase D: module breakdown + currentModule)
-  const track3Mods = await prisma.module.findMany({
+  // Standard Track 3 modules only (excludes term exams + completion exam — matches production eligibility)
+  const track3StandardMods = await prisma.module.findMany({
     where: {
       track: TrackLevel.TRACK_3,
+      moduleType: ModuleType.STANDARD,
       OR: [
         { stackVariant: ModuleStackVariant.COMMON },
         { stackVariant: ModuleStackVariant.PYTHON_FLASK },
@@ -928,7 +1047,8 @@ async function main() {
     } as unknown as Prisma.ModuleWhereInput,
     orderBy: [{ number: 'asc' }, { stackVariant: 'asc' }] as Prisma.ModuleOrderByWithRelationInput[],
   });
-  const progressDataAisha = [
+  // Crown Heights SS3A — mid-track: high performer vs failed retake vs class on next module
+  const progressDataAisha: ProgressRow[] = [
     { score: 92, status: 'COMPLETED' },
     { score: 88, status: 'COMPLETED' },
     { score: 85, status: 'COMPLETED' },
@@ -936,21 +1056,7 @@ async function main() {
     { score: 95, status: 'COMPLETED' },
     { score: null, status: 'IN_PROGRESS' },
   ];
-  for (let i = 0; i < track3Mods.length; i++) {
-    const row = progressDataAisha[i] || { score: null, status: 'LOCKED' };
-    await prisma.moduleProgress.upsert({
-      where: { studentId_moduleId: { studentId: student.id, moduleId: track3Mods[i].id } },
-      update: {},
-      create: {
-        studentId: student.id,
-        moduleId: track3Mods[i].id,
-        status: row.status as any,
-        score: row.score,
-        completedAt: row.status === 'COMPLETED' ? new Date() : null,
-      },
-    });
-  }
-  const progressDataTunde = [
+  const progressDataTunde: ProgressRow[] = [
     { score: 72, status: 'COMPLETED' },
     { score: 65, status: 'COMPLETED' },
     { score: 58, status: 'FAILED' },
@@ -958,24 +1064,216 @@ async function main() {
     { score: null, status: 'LOCKED' },
     { score: null, status: 'LOCKED' },
   ];
-  for (let i = 0; i < track3Mods.length; i++) {
-    const row = progressDataTunde[i] || { score: null, status: 'LOCKED' };
-    await prisma.moduleProgress.upsert({
-      where: { studentId_moduleId: { studentId: student2.id, moduleId: track3Mods[i].id } },
-      update: {},
-      create: {
-        studentId: student2.id,
-        moduleId: track3Mods[i].id,
-        status: row.status as any,
-        score: row.score,
-        completedAt: row.status === 'COMPLETED' ? new Date() : null,
-      },
+  await upsertStudentModuleProgress(student.id, track3StandardMods, progressDataAisha);
+  await upsertStudentModuleProgress(student2.id, track3StandardMods, progressDataTunde);
+  console.log('✅ Crown Heights SS3A — in-progress demo (Aisha near finish, Tunde failed M3)');
+
+  // ── Track 1 SS1A / SS1B — Typing Lab demo (Module 2 Mouse, Keyboard & Windows) ──
+  const track1StandardMods = await prisma.module.findMany({
+    where: {
+      track: TrackLevel.TRACK_1,
+      moduleType: ModuleType.STANDARD,
+      stackVariant: ModuleStackVariant.COMMON,
+    },
+    orderBy: { number: 'asc' },
+  });
+  const modT1Second = track1StandardMods.find((m) => m.number === 2);
+  const modT1Third = track1StandardMods.find((m) => m.number === 3);
+
+  /** Class pace: `finalized` modules tutor has advanced; `current` is in progress for the whole class. */
+  function track1ClassProgress(
+    finalizedCount: number,
+    currentModuleNumber: number,
+    moduleScores: Record<number, number>,
+  ): ProgressRow[] {
+    return track1StandardMods.map((m) => {
+      if (m.number <= finalizedCount) {
+        return { score: moduleScores[m.number] ?? 75, status: 'COMPLETED' };
+      }
+      if (m.number === currentModuleNumber) {
+        return { score: null, status: 'IN_PROGRESS' };
+      }
+      return { score: null, status: 'LOCKED' };
     });
   }
-  console.log('✅ Demo students (SS3A · TRACK_3) + module progress');
+
+  const progressSS1A = track1ClassProgress(1, 2, { 1: 78 });
+  const progressSS1B_Mary = track1ClassProgress(2, 3, { 1: 82, 2: 85 });
+  const progressSS1B_Kemi = track1ClassProgress(2, 3, { 1: 76, 2: 80 });
+  const progressSS1B_Tobi = track1ClassProgress(2, 3, { 1: 90, 2: 88 });
+
+  async function upsertTrack1DemoStudent(opts: {
+    email: string;
+    username: string;
+    regNumber: string;
+    firstName: string;
+    lastName: string;
+    className: string;
+    progress: ProgressRow[];
+  }) {
+    const pw = await argon2.hash(studentPasswordFromReg(opts.regNumber));
+    const user = await prisma.user.upsert({
+      where: { email: opts.email },
+      update: {
+        password: pw,
+        firstName: opts.firstName,
+        lastName: opts.lastName,
+        role: 'STUDENT',
+        schoolId: school.id,
+        username: opts.username,
+        mustChangePassword: false,
+      },
+      create: {
+        email: opts.email,
+        username: opts.username,
+        password: pw,
+        firstName: opts.firstName,
+        lastName: opts.lastName,
+        role: 'STUDENT',
+        schoolId: school.id,
+        mustChangePassword: false,
+      },
+    });
+    const row = await prisma.student.upsert({
+      where: { regNumber: opts.regNumber },
+      update: {
+        className: opts.className,
+        track: TrackLevel.TRACK_1,
+        termLabel: '2025/2026 Term 2',
+      },
+      create: {
+        userId: user.id,
+        schoolId: school.id,
+        regNumber: opts.regNumber,
+        className: opts.className,
+        track: TrackLevel.TRACK_1,
+        termLabel: '2025/2026 Term 2',
+      },
+    });
+    await upsertStudentModuleProgress(row.id, track1StandardMods, opts.progress);
+    return row;
+  }
+
+  if (track1StandardMods.length && modT1Second) {
+    const lessonM2 = await prisma.curriculumLesson.findFirst({
+      where: { moduleId: modT1Second.id, isPublished: true },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    const lessonM3 = modT1Third
+      ? await prisma.curriculumLesson.findFirst({
+          where: { moduleId: modT1Third.id, isPublished: true },
+          orderBy: { position: 'asc' },
+          select: { id: true },
+        })
+      : null;
+
+    if (lessonM2) {
+      await prisma.classCurriculumState.upsert({
+        where: {
+          schoolId_className_curriculumBranchKey: {
+            schoolId: school.id,
+            className: 'SS1A',
+            curriculumBranchKey: TrackLevel.TRACK_1,
+          },
+        },
+        update: {
+          currentLessonId: lessonM2.id,
+          lastDeliveredLessonId: lessonM2.id,
+        },
+        create: {
+          schoolId: school.id,
+          className: 'SS1A',
+          curriculumBranchKey: TrackLevel.TRACK_1,
+          currentLessonId: lessonM2.id,
+          lastDeliveredLessonId: lessonM2.id,
+        },
+      });
+    }
+    if (lessonM3) {
+      await prisma.classCurriculumState.upsert({
+        where: {
+          schoolId_className_curriculumBranchKey: {
+            schoolId: school.id,
+            className: 'SS1B',
+            curriculumBranchKey: TrackLevel.TRACK_1,
+          },
+        },
+        update: {
+          currentLessonId: lessonM3.id,
+          lastDeliveredLessonId: lessonM3.id,
+        },
+        create: {
+          schoolId: school.id,
+          className: 'SS1B',
+          curriculumBranchKey: TrackLevel.TRACK_1,
+          currentLessonId: lessonM3.id,
+          lastDeliveredLessonId: lessonM3.id,
+        },
+      });
+    }
+
+    await upsertTrack1DemoStudent({
+      email: 'typing.demo@crownheights.edu.ng',
+      username: 'chr.typing',
+      regNumber: 'CHR/2026/SS1A/901',
+      firstName: 'Demo',
+      lastName: 'Typist',
+      className: 'SS1A',
+      progress: progressSS1A,
+    });
+    await upsertTrack1DemoStudent({
+      email: 'typing2.demo@crownheights.edu.ng',
+      username: 'chr.typing2',
+      regNumber: 'CHR/2026/SS1A/902',
+      firstName: 'Ada',
+      lastName: 'Keys',
+      className: 'SS1A',
+      progress: progressSS1A,
+    });
+    await upsertTrack1DemoStudent({
+      email: 'typing3.demo@crownheights.edu.ng',
+      username: 'chr.typing3',
+      regNumber: 'CHR/2026/SS1A/903',
+      firstName: 'Samuel',
+      lastName: 'Ali',
+      className: 'SS1A',
+      progress: progressSS1A,
+    });
+    await upsertTrack1DemoStudent({
+      email: 'typing4.demo@crownheights.edu.ng',
+      username: 'chr.typing4',
+      regNumber: 'CHR/2026/SS1B/901',
+      firstName: 'Mary',
+      lastName: 'Okafor',
+      className: 'SS1B',
+      progress: progressSS1B_Mary,
+    });
+    await upsertTrack1DemoStudent({
+      email: 'typing5.demo@crownheights.edu.ng',
+      username: 'chr.typing5',
+      regNumber: 'CHR/2026/SS1B/902',
+      firstName: 'Kemi',
+      lastName: 'Adeyemi',
+      className: 'SS1B',
+      progress: progressSS1B_Kemi,
+    });
+    await upsertTrack1DemoStudent({
+      email: 'typing6.demo@crownheights.edu.ng',
+      username: 'chr.typing6',
+      regNumber: 'CHR/2026/SS1B/903',
+      firstName: 'Tobi',
+      lastName: 'Musa',
+      className: 'SS1B',
+      progress: progressSS1B_Tobi,
+    });
+    console.log('✅ Crown Heights SS1A (1 mod) / SS1B (2 mods) — Track 1 leaderboard pace demo');
+  } else {
+    console.warn('⚠️ Track 1 modules missing — typing lab demo seed skipped');
+  }
 
   // ── Phase D: data consumed by GET /class-performance roll-up ─────────────────
-  const modT3First = track3Mods[0];
+  const modT3First = track3StandardMods[0];
   if (!modT3First) {
     console.warn('⚠️ No Track 3 modules; skipping Phase D grade seed');
   } else {
@@ -1211,7 +1509,11 @@ async function main() {
     const practicalTaskId = 'seed-practical-ss3a-m1';
     await prisma.practicalTask.upsert({
       where: { id: practicalTaskId },
-      update: {},
+      update: {
+        submissionType: 'html',
+        modelAnswer: 'Semantic layout (header, nav, main, footer), CSS flex/grid, JS click handler.',
+        lessonObjective: 'Demonstrate a simple responsive webpage with interactivity.',
+      } as unknown as Prisma.PracticalTaskUpdateInput,
       create: {
         id: practicalTaskId,
         tutorId: tutorUser.id,
@@ -1220,10 +1522,14 @@ async function main() {
         moduleId: modT3First.id,
         title: '[SEED] Lab: simple webpage',
         description: 'Hands-on task for Phase D demo.',
+        instructions: 'Submit HTML/CSS/JS (paste code or upload .html). Include header, nav, main, footer, flex/grid CSS, and a button with a click handler.',
         maxScore: 100,
         passScore: 50,
+        submissionType: 'html',
+        modelAnswer: 'Semantic layout (header, nav, main, footer), CSS flex/grid, JS click handler.',
+        lessonObjective: 'Demonstrate a simple responsive webpage with interactivity.',
         isPublished: true,
-      },
+      } as unknown as Prisma.PracticalTaskCreateInput,
     });
     await prisma.practicalSubmission.upsert({
       where: { taskId_studentId_attempt: { taskId: practicalTaskId, studentId: student.id, attempt: 1 } },
@@ -1264,8 +1570,366 @@ async function main() {
       },
     });
 
+    const htmlDemoTaskId = 'seed-practical-ss3a-html-ai';
+    const sampleHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Adhara Landing Page</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    .layout { display: flex; flex-direction: column; min-height: 100vh; }
+    main { flex: 1; padding: 24px; }
+    nav { padding: 12px; background: #0B2048; color: white; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <header><h1>Adhara Tech Club</h1></header>
+    <nav><a href="#home">Home</a></nav>
+    <main>
+      <p>Welcome to our SS3 web design lab.</p>
+      <button id="cta">Join now</button>
+    </main>
+    <footer><small>© 2026 Crown Heights</small></footer>
+  </div>
+  <script>
+    document.getElementById('cta').addEventListener('click', function () {
+      this.textContent = 'Thanks for joining!';
+    });
+  </script>
+</body>
+</html>`;
+    await prisma.practicalTask.upsert({
+      where: { id: htmlDemoTaskId },
+      update: {
+        submissionType: 'html',
+        instructions: 'Build a landing page with semantic HTML, flex layout, and a button that changes text on click.',
+      } as unknown as Prisma.PracticalTaskUpdateInput,
+      create: {
+        id: htmlDemoTaskId,
+        tutorId: tutorUser.id,
+        schoolId: school.id,
+        className: 'SS3A',
+        moduleId: modT3First.id,
+        title: '[SEED] AI grading demo — HTML landing page',
+        description: 'Ungraded submission with pasted HTML for tutor AI suggest grade testing.',
+        instructions: 'Build a landing page with semantic HTML, flex layout, and a button that changes text on click.',
+        maxScore: 100,
+        passScore: 50,
+        submissionType: 'html',
+        modelAnswer: 'Must include header, nav, main, footer; display:flex; addEventListener click on button.',
+        lessonObjective: 'Apply semantic HTML, CSS layout, and basic JavaScript events.',
+        isPublished: true,
+      } as unknown as Prisma.PracticalTaskCreateInput,
+    });
+    const htmlDemoEvidence = extractFromHtmlSources([{ filename: 'index.html', content: sampleHtml }]);
+    await prisma.practicalSubmission.upsert({
+      where: { taskId_studentId_attempt: { taskId: htmlDemoTaskId, studentId: student2.id, attempt: 1 } },
+      update: {
+        evidenceText: sampleHtml,
+        status: 'SUBMITTED',
+        totalScore: null,
+        gradedAt: null,
+        gradedBy: null,
+        extractedEvidence: htmlDemoEvidence as any,
+        extractionStatus: 'ok',
+        extractedAt: new Date(),
+        extractionError: null,
+        aiProposedScore: null,
+        aiProposedFeedback: null,
+        aiScoreBreakdown: null,
+      } as unknown as Prisma.PracticalSubmissionUpdateInput,
+      create: {
+        taskId: htmlDemoTaskId,
+        studentId: student2.id,
+        attempt: 1,
+        evidenceText: sampleHtml,
+        status: 'SUBMITTED',
+        extractedEvidence: htmlDemoEvidence as any,
+        extractionStatus: 'ok',
+        extractedAt: new Date(),
+      } as unknown as Prisma.PracticalSubmissionUncheckedCreateInput,
+    });
+
+    await seedEvidenceTypeDemos({
+      prisma,
+      tutorUserId: tutorUser.id,
+      schoolId: school.id,
+      moduleId: modT3First.id,
+      studentId: student2.id,
+      className: 'SS3A',
+    });
+
+    await seedAssignmentEvidenceDemos({
+      prisma,
+      tutorUserId: tutorUser.id,
+      schoolId: school.id,
+      moduleId: modT3First.id,
+      studentId: student2.id,
+      className: 'SS3A',
+    });
+
     console.log('✅ Phase D: attendance, curriculum + class assignments, CBT attempts, exam schedule (My Exams), practicals');
   }
+
+  // ── Lakeside Demo Academy — graduated class (production-faithful certificate path) ──
+  const lakesideAdminPw = await argon2.hash('SchoolAdmin@123');
+  const lakesideAdmin = await prisma.user.upsert({
+    where: { email: 'admin@lakeside.demo' },
+    update: {
+      password: lakesideAdminPw,
+      firstName: 'Lakeside',
+      lastName: 'Admin',
+      role: 'SCHOOL_ADMIN',
+    },
+    create: {
+      email: 'admin@lakeside.demo',
+      password: lakesideAdminPw,
+      firstName: 'Lakeside',
+      lastName: 'Admin',
+      role: 'SCHOOL_ADMIN',
+    },
+  });
+  const lakesideSchool = await prisma.school.upsert({
+    where: { code: 'LSD' },
+    update: {
+      notes: lakesideSchoolNotes,
+      enrolledTracks: [TrackLevel.TRACK_3],
+      officialName: 'Lakeside Demo Academy',
+      profileCompletedAt: new Date(),
+    } as unknown as Prisma.SchoolUpdateInput,
+    create: {
+      name: 'Lakeside Demo Academy',
+      officialName: 'Lakeside Demo Academy',
+      schoolType: 'SECONDARY' as const,
+      code: 'LSD',
+      address: '8 Innovation Close, Lekki',
+      state: 'Lagos',
+      lga: 'Eti-Osa',
+      principalName: 'Mrs. Adaeze Eze',
+      principalPhone: '+234 802 111 2233',
+      officialEmail: 'admin@lakeside.demo',
+      officialPhone: '+234 802 111 2233',
+      platformLevels: ['SS3'],
+      currentTermLabel: 'Third Term',
+      academicYearLabel: '2025/2026',
+      studentCountBand: 'Under 100',
+      status: 'APPROVED' as const,
+      enrolledTracks: [TrackLevel.TRACK_3],
+      feesPerStudent: 8000,
+      notes: lakesideSchoolNotes,
+      profileCompletedAt: new Date(),
+      admins: { connect: { id: lakesideAdmin.id } },
+    } as unknown as Prisma.SchoolCreateInput,
+  });
+  console.log('✅ Lakeside Demo Academy (graduated class SS3B)');
+
+  const lakesideTutorPw = await argon2.hash('Tutor@123');
+  const lakesideTutorUser = await prisma.user.upsert({
+    where: { email: 'tutor@lakeside.demo' },
+    update: {
+      password: lakesideTutorPw,
+      firstName: 'Ada',
+      lastName: 'Bello',
+      role: 'TUTOR',
+      phone: '+234 803 222 3344',
+      schoolId: lakesideSchool.id,
+    },
+    create: {
+      email: 'tutor@lakeside.demo',
+      password: lakesideTutorPw,
+      firstName: 'Ada',
+      lastName: 'Bello',
+      role: 'TUTOR',
+      phone: '+234 803 222 3344',
+      schoolId: lakesideSchool.id,
+    },
+  });
+  const lakesideTutor = await prisma.tutor.upsert({
+    where: { userId: lakesideTutorUser.id },
+    update: {
+      tracks: [TrackLevel.TRACK_3],
+      onboardingStatus: 'COMPLETE',
+      isVerified: true,
+      rating: 4.7,
+    },
+    create: {
+      userId: lakesideTutorUser.id,
+      bio: 'Track 3 tutor at Lakeside Demo Academy.',
+      specializations: ['Python', 'Flask', 'Web Development'],
+      tracks: [TrackLevel.TRACK_3],
+      isVerified: true,
+      rating: 4.7,
+      onboardingStatus: 'COMPLETE',
+    },
+  });
+
+  // Crown Heights tutor must not retain Lakeside placements (one school per tutor).
+  await prisma.tutorAssignment.updateMany({
+    where: {
+      tutorId: tutor.id,
+      schoolId: { not: school.id },
+      isActive: true,
+    },
+    data: { isActive: false, endDate: new Date() },
+  });
+
+  await prisma.tutorAssignment.upsert({
+    where: { id: 'demo-assignment-lakeside-ss3b' },
+    update: {
+      tutorId: lakesideTutor.id,
+      track3Stack: Track3Stack.PYTHON_FLASK,
+      isActive: true,
+    } as Prisma.TutorAssignmentUpdateInput,
+    create: {
+      id: 'demo-assignment-lakeside-ss3b',
+      tutorId: lakesideTutor.id,
+      schoolId: lakesideSchool.id,
+      track: TrackLevel.TRACK_3,
+      className: 'SS3B',
+      termLabel: '2025/2026 Term 3',
+      isActive: true,
+      startDate: new Date('2026-01-06'),
+      track3Stack: Track3Stack.PYTHON_FLASK,
+    } as unknown as Prisma.TutorAssignmentCreateInput,
+  });
+
+  const graduateProgress: ProgressRow[] = [
+    { score: 88, status: 'COMPLETED' },
+    { score: 84, status: 'COMPLETED' },
+    { score: 79, status: 'COMPLETED' },
+    { score: 82, status: 'COMPLETED' },
+    { score: 90, status: 'COMPLETED' },
+    { score: 87, status: 'COMPLETED' },
+  ];
+
+  const chiomaPw = await argon2.hash('student@031');
+  const chiomaUser = await prisma.user.upsert({
+    where: { email: 'chioma@lakeside.demo' },
+    update: {
+      password: chiomaPw,
+      firstName: 'Chioma',
+      lastName: 'Eze',
+      role: 'STUDENT',
+      schoolId: lakesideSchool.id,
+      username: 'lsd.chioma',
+      mustChangePassword: true,
+    },
+    create: {
+      email: 'chioma@lakeside.demo',
+      username: 'lsd.chioma',
+      password: chiomaPw,
+      firstName: 'Chioma',
+      lastName: 'Eze',
+      role: 'STUDENT',
+      schoolId: lakesideSchool.id,
+      mustChangePassword: true,
+    },
+  });
+  const chioma = await prisma.student.upsert({
+    where: { regNumber: 'LSD/2024/SS3B/031' },
+    update: { track3Stack: Track3Stack.PYTHON_FLASK } as Prisma.StudentUpdateInput,
+    create: {
+      userId: chiomaUser.id,
+      schoolId: lakesideSchool.id,
+      regNumber: 'LSD/2024/SS3B/031',
+      className: 'SS3B',
+      track: TrackLevel.TRACK_3,
+      termLabel: '2025/2026 Term 3',
+      track3Stack: Track3Stack.PYTHON_FLASK,
+    } as unknown as Prisma.StudentCreateInput,
+  });
+
+  const amaraPw = await argon2.hash('student@032');
+  const amaraUser = await prisma.user.upsert({
+    where: { email: 'amara@lakeside.demo' },
+    update: {
+      password: amaraPw,
+      firstName: 'Amara',
+      lastName: 'Okoro',
+      role: 'STUDENT',
+      schoolId: lakesideSchool.id,
+      username: 'lsd.amara',
+      mustChangePassword: true,
+    },
+    create: {
+      email: 'amara@lakeside.demo',
+      username: 'lsd.amara',
+      password: amaraPw,
+      firstName: 'Amara',
+      lastName: 'Okoro',
+      role: 'STUDENT',
+      schoolId: lakesideSchool.id,
+      mustChangePassword: true,
+    },
+  });
+  const amara = await prisma.student.upsert({
+    where: { regNumber: 'LSD/2024/SS3B/032' },
+    update: { track3Stack: Track3Stack.PYTHON_FLASK } as Prisma.StudentUpdateInput,
+    create: {
+      userId: amaraUser.id,
+      schoolId: lakesideSchool.id,
+      regNumber: 'LSD/2024/SS3B/032',
+      className: 'SS3B',
+      track: TrackLevel.TRACK_3,
+      termLabel: '2025/2026 Term 3',
+      track3Stack: Track3Stack.PYTHON_FLASK,
+    } as unknown as Prisma.StudentCreateInput,
+  });
+
+  await upsertStudentModuleProgress(chioma.id, track3StandardMods, graduateProgress);
+  await upsertStudentModuleProgress(amara.id, track3StandardMods, graduateProgress);
+
+  const track3CompletionMod = await prisma.module.findFirst({
+    where: {
+      track: TrackLevel.TRACK_3,
+      moduleType: ModuleType.TRACK_COMPLETION_EXAM,
+      stackVariant: ModuleStackVariant.COMMON,
+    } as unknown as Prisma.ModuleWhereInput,
+  });
+  const completionCbtId = 'seed-cbt-track3-completion';
+  if (track3CompletionMod) {
+    await prisma.cBTExam.upsert({
+      where: { id: completionCbtId },
+      update: { moduleId: track3CompletionMod.id, isPublished: true, isVetted: true },
+      create: {
+        id: completionCbtId,
+        tutorId: lakesideTutor.id,
+        moduleId: track3CompletionMod.id,
+        title: '[SEED] Track 3 Completion Exam',
+        description: 'Capstone CBT — required for certificate eligibility (≥50%).',
+        track: TrackLevel.TRACK_3,
+        durationMins: 45,
+        totalQuestions: 20,
+        passScore: 50,
+        isPublished: true,
+        isVetted: true,
+      },
+    });
+    for (const [studentId, attemptId, score] of [
+      [chioma.id, 'seed-exam-attempt-chioma-completion', 78],
+      [amara.id, 'seed-exam-attempt-amara-completion', 81],
+    ] as const) {
+      await prisma.examAttempt.upsert({
+        where: { id: attemptId },
+        update: { score, status: ExamStatus.COMPLETED, submittedAt: new Date() },
+        create: {
+          id: attemptId,
+          cbtExamId: completionCbtId,
+          studentId,
+          answers: {} as any,
+          score,
+          totalCorrect: Math.round(score / 5),
+          timeTaken: 1200,
+          status: ExamStatus.COMPLETED,
+          submittedAt: new Date(),
+        },
+      });
+    }
+  }
+
+  console.log('✅ Lakeside SS3B graduates — all modules complete + completion exam passed');
 
   // Demo parent
   const parentPw = await argon2.hash('Parent@123');
@@ -1308,46 +1972,54 @@ async function main() {
     ],
   });
 
-  // Demo certificates — Superadmin "All Certificates" + /verify-certificate/{serial} (PDF is null until issued via API with Cloudinary)
-  const seedSerialAisha = 'ADH-CERT-2026-SEED-AISHA';
-  const seedSerialTunde = 'ADH-CERT-2026-SEED-TUNDE';
-  await prisma.certificate.upsert({
-    where: { serialNumber: seedSerialAisha },
-    update: {},
-    create: {
-      studentId: student.id,
-      track: 'TRACK_3',
-      serialNumber: seedSerialAisha,
-      averageScore: 90,
-      pdfUrl: null,
-      qrCode: null,
-      isRevoked: false,
-    },
+  // Remove legacy fake certificates that bypassed eligibility rules
+  await prisma.certificate.deleteMany({
+    where: { serialNumber: { in: ['ADH-CERT-2026-SEED-AISHA', 'ADH-CERT-2026-SEED-TUNDE'] } },
   });
-  await prisma.certificate.upsert({
-    where: { serialNumber: seedSerialTunde },
-    update: {},
-    create: {
-      studentId: student2.id,
-      track: 'TRACK_3',
-      serialNumber: seedSerialTunde,
-      averageScore: 72,
-      pdfUrl: null,
-      qrCode: null,
-      isRevoked: false,
-    },
-  });
-  console.log('✅ Demo certificates (2) — Superadmin → Certificates; verify:', seedSerialAisha);
 
-  console.log('\n🎉 Seed complete! Login credentials:');
-  console.log('  Super Admin:  admin@adharaedu.com / SuperAdmin@123');
-  console.log('  School Admin: admin@crownheights.edu.ng / SchoolAdmin@123');
-  console.log('  Tutor:        tutor@adharaedu.com / Tutor@123 (onboarding COMPLETE + KYC fields)');
-  console.log('  Student:      chr.aisha or aisha@crownheights.edu.ng / student@021');
-  console.log('  Student:      chr.tunde or tunde@crownheights.edu.ng / student@022 (SS3A peer)');
-  console.log('  Parent:       funke.okonkwo@gmail.com / Parent@123');
-  console.log('\n  Phase D: SS3A / TRACK_3 has attendance, module progress, curriculum + class homework,');
-  console.log('  CBT attempts, practicals — try GET /class-performance or dashboard Class performance.\n');
+  const chiomaSerial = 'ADH-CERT-2026-DEMO-CHIOMA';
+  const chiomaAvg = Math.round(
+    graduateProgress.reduce((sum, row) => sum + (row.score || 0), 0) / graduateProgress.length,
+  );
+  const chiomaCert = await issueDemoCertificateLocal({
+    studentId: chioma.id,
+    track: TrackLevel.TRACK_3,
+    serialNumber: chiomaSerial,
+    averageScore: chiomaAvg,
+  });
+  console.log('✅ Chioma certificate issued (downloadable PDF):', chiomaCert.serialNumber);
+  console.log('   Amara is eligible but not issued — use Superadmin → Certificate Authorization to test branded PDF issue.');
+
+  console.log('\n🎉 Seed complete! Demo matches production rules — two schools, two scenarios:\n');
+  console.log('  Super Admin:     admin@adharaedu.com / SuperAdmin@123');
+  console.log('  Curriculum Lead: curriculum@adharaedu.com / Curriculum@123');
+  console.log('  Tutor:           tutor@adharaedu.com / Tutor@123');
+  console.log('');
+  console.log('  CROWN HEIGHTS (CHR) — SS3A mid-track · test pass / fail / in-progress');
+  console.log('    School admin:  admin@crownheights.edu.ng / SchoolAdmin@123');
+  console.log('    Aisha:         aisha@crownheights.edu.ng / student@021 — 5/6 done, capstone module in progress, NO cert');
+  console.log('    Tunde:         tunde@crownheights.edu.ng / student@022 — Module 3 FAILED (retake), Module 4 in progress, NO cert');
+  console.log('    Parent:        funke.okonkwo@gmail.com / Parent@123');
+  console.log('');
+  console.log('  CROWN HEIGHTS (CHR) — SS1A vs SS1B Track 1 · different class pace + typing lab');
+  console.log('    SS1A — 1 module finalized, Module 2 in progress (typing lab unlocked):');
+  console.log('    CHR/2026/SS1A/901 / student@901 — Demo Typist');
+  console.log('    CHR/2026/SS1A/902 / student@902 — Ada Keys');
+  console.log('    CHR/2026/SS1A/903 / student@903 — Samuel Ali');
+  console.log('    SS1B — 2 modules finalized, Module 3 in progress (ahead of SS1A):');
+  console.log('    CHR/2026/SS1B/901 / student@901 — Mary Okafor');
+  console.log('    CHR/2026/SS1B/902 / student@902 — Kemi Adeyemi');
+  console.log('    CHR/2026/SS1B/903 / student@903 — Tobi Musa (top Track 1 avg ~89%)');
+  console.log('    Leaderboard → All Classes: compare SS1A · 1 module vs SS1B · 2 modules');
+  console.log('');
+  console.log('  LAKESIDE (LSD) — SS3B graduated · test certificate download + superadmin issue');
+  console.log('    Tutor:         tutor@lakeside.demo / Tutor@123');
+  console.log('    School admin:  admin@lakeside.demo / SchoolAdmin@123');
+  console.log('    Chioma:        chioma@lakeside.demo / student@031 — eligible + cert issued (My Certificates → Download PDF)');
+  console.log('    Amara:         amara@lakeside.demo / student@032 — eligible, NOT issued (Superadmin → Certificate Authorization → Issue branded PDF)');
+  console.log(`    Verify Chioma: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-certificate/${chiomaSerial}`);
+  console.log('');
+  console.log('  Superadmin tests: Certificate Authorization → Amara should appear eligible; bulk issue for Lakeside school.\n');
 }
 
 main().catch(console.error).finally(() => prisma.$disconnect());

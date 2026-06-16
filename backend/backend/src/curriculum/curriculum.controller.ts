@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Track3Stack, TrackLevel } from '@prisma/client';
 import { CurriculumLessonsService } from './curriculum-lessons.service';
 import { ClassCurriculumService } from './class-curriculum.service';
+import { LessonActivitiesService } from './lesson-activities.service';
 import { JwtAuthGuard, RolesGuard, Roles, TutorOnboardingGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Curriculum')
@@ -13,6 +14,7 @@ export class CurriculumController {
   constructor(
     private lessonsService: CurriculumLessonsService,
     private classState: ClassCurriculumService,
+    private lessonActivities: LessonActivitiesService,
   ) {}
 
   @Get('modules/:moduleId/lessons')
@@ -69,6 +71,77 @@ export class CurriculumController {
   @Roles('SUPER_ADMIN', 'CURRICULUM_LEAD')
   remove(@Param('id') id: string) {
     return this.lessonsService.delete(id);
+  }
+
+  @Get('lesson-activities')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN')
+  listLessonActivities(
+    @Request() req,
+    @Query('moduleId') moduleId: string,
+    @Query('schoolId') schoolId: string,
+    @Query('className') className: string,
+  ) {
+    return this.lessonActivities.listForModule(req.user.sub, moduleId, schoolId, className);
+  }
+
+  @Get('lesson-formative-summary')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN')
+  lessonFormativeSummary(
+    @Query('schoolId') schoolId: string,
+    @Query('className') className: string,
+    @Query('moduleId') moduleId: string,
+  ) {
+    return this.lessonActivities.classFormativeSummaries(schoolId, className, moduleId);
+  }
+
+  @Post('lessons/:lessonId/micro-quiz')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  upsertMicroQuiz(@Request() req, @Param('lessonId') lessonId: string, @Body() body: any) {
+    return this.lessonActivities.upsertMicroQuiz(req.user.sub, {
+      curriculumLessonId: lessonId,
+      schoolId: body.schoolId,
+      className: body.className,
+      moduleId: body.moduleId,
+      isEnabled: body.isEnabled,
+      title: body.title,
+      questions: body.questions,
+    });
+  }
+
+  @Delete('micro-quiz/:quizId')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  disableMicroQuiz(@Request() req, @Param('quizId') quizId: string) {
+    return this.lessonActivities.disableMicroQuiz(req.user.sub, quizId);
+  }
+
+  @Post('lessons/:lessonId/lesson-assignment')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  upsertLessonAssignment(@Request() req, @Param('lessonId') lessonId: string, @Body() body: any) {
+    return this.lessonActivities.upsertLessonAssignment(req.user.sub, {
+      curriculumLessonId: lessonId,
+      schoolId: body.schoolId,
+      className: body.className,
+      moduleId: body.moduleId,
+      enabled: body.enabled !== false,
+      title: body.title,
+      description: body.description,
+      dueDate: body.dueDate,
+      maxScore: body.maxScore,
+      isOptional: body.isOptional,
+      submissionType: body.submissionType,
+    });
+  }
+
+  @Post('micro-quiz/:quizId/submit')
+  @UseGuards(RolesGuard)
+  @Roles('STUDENT')
+  submitMicroQuiz(@Request() req, @Param('quizId') quizId: string, @Body() body: { answers: number[] }) {
+    return this.lessonActivities.submitMicroQuiz(req.user.sub, quizId, body.answers || []);
   }
 
   @Get('class-state')

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { PrismaDb } from '../common/prisma-db.type';
 import { curriculumBranchKey } from '../common/curriculum-branch';
 import { CurriculumLessonsService } from './curriculum-lessons.service';
+import { LessonActivitiesService } from './lesson-activities.service';
 import { modulesWhereForTrack } from '../common/module-curriculum';
 
 @Injectable()
@@ -11,6 +12,7 @@ export class ClassCurriculumService {
   constructor(
     private prisma: PrismaService,
     private lessons: CurriculumLessonsService,
+    private lessonActivities: LessonActivitiesService,
   ) {}
 
   async getState(
@@ -63,6 +65,14 @@ export class ClassCurriculumService {
       },
       update: { currentLessonId: first?.id ?? null },
     });
+  }
+
+  private async filesForModule(moduleId: string) {
+    const moduleUploads = await this.prisma.upload.findMany({
+      where: { entityType: ClassCurriculumService.ENTITY_MODULE_MATERIAL, entityId: moduleId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return this.mapUploadRows(moduleUploads);
   }
 
   private async filesForLesson(lessonId: string, moduleId: string) {
@@ -237,6 +247,8 @@ export class ClassCurriculumService {
   static readonly ENTITY_CURRICULUM_LESSON = 'curriculum-lesson';
   /** Uploads entityType for module-wide materials when there are no per-lesson files or as fallback. */
   static readonly ENTITY_MODULE_MATERIAL = 'module-material';
+  /** Tutor lesson plan attachments (PDF, slides, etc.). */
+  static readonly ENTITY_LESSON_PLAN = 'lesson-plan';
 
   private mapUploadRows(rows: { id: string; url: string; resourceType: string; createdAt: Date }[]) {
     return rows.map((r) => ({
@@ -293,7 +305,9 @@ export class ClassCurriculumService {
         nextLesson: null,
         lastDeliveredLesson: null,
         lessons: [],
+        moduleFiles: [],
         tutorHandouts: [],
+        tutorLessonMaterials: [],
       };
     }
 
@@ -308,14 +322,27 @@ export class ClassCurriculumService {
     });
     const progressByLesson = new Map(progressRows.map((r) => [r.lessonId, r]));
 
+    const activityByLesson = await this.lessonActivities.enrichLessonsForStudent(
+      student.id,
+      student.schoolId,
+      student.className,
+      moduleId,
+      lessons.map((l) => l.id),
+    );
+
     const lessonItems = await Promise.all(
       lessons.map(async (L) => ({
         ...this.lessonSummary(L),
+        delivered: progressByLesson.get(L.id)?.completed ?? false,
         completed: progressByLesson.get(L.id)?.completed ?? false,
         completedAt: progressByLesson.get(L.id)?.completedAt ?? null,
+        quickCheckScore: progressByLesson.get(L.id)?.quickCheckScore ?? null,
         files: await this.filesForLesson(L.id, moduleId),
+        activities: activityByLesson.get(L.id) ?? { microQuiz: null, lessonAssignment: null },
       })),
     );
+
+    const formativeSummary = await this.lessonActivities.studentFormativeSummary(student.id, moduleId);
 
     const nextLesson = state?.currentLesson
       ? {
@@ -331,14 +358,15 @@ export class ClassCurriculumService {
         }
       : null;
 
-    const tutorPlans = await this.prisma.lessonPlan.findMany({
+    const moduleFiles = await this.filesForModule(moduleId);
+
+    const classLessonPlans = await this.prisma.lessonPlan.findMany({
       where: {
         schoolId: student.schoolId,
         className: student.className,
         moduleId,
-        materialPublishedAt: { not: null },
       },
-      orderBy: { materialPublishedAt: 'desc' },
+      orderBy: [{ materialPublishedAt: 'desc' }, { scheduledAt: 'desc' }, { createdAt: 'desc' }],
       select: {
         id: true,
         title: true,
@@ -348,6 +376,39 @@ export class ClassCurriculumService {
       },
     });
 
+    const tutorHandouts = classLessonPlans
+      .filter((p) => p.materialPublishedAt != null && p.studentHandoutMarkdown?.trim())
+      .map((p) => ({
+        id: p.id,
+        title: p.title,
+        handoutMarkdown: p.studentHandoutMarkdown,
+        publishedAt: p.materialPublishedAt,
+        curriculumLesson: p.curriculumLesson,
+      }));
+
+    const tutorLessonMaterials = await Promise.all(
+      classLessonPlans.map(async (p) => {
+        const uploads = await this.prisma.upload.findMany({
+          where: {
+            entityType: ClassCurriculumService.ENTITY_LESSON_PLAN,
+            entityId: p.id,
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        const files = this.mapUploadRows(uploads);
+        const hasPublishedHandout = !!(p.materialPublishedAt && p.studentHandoutMarkdown?.trim());
+        if (!files.length && !hasPublishedHandout) return null;
+        return {
+          id: p.id,
+          title: p.title,
+          curriculumLesson: p.curriculumLesson,
+          files,
+          hasPublishedHandout,
+          publishedAt: p.materialPublishedAt,
+        };
+      }),
+    );
+
     return {
       activeModule: activeProgress?.module ?? lessons[0]?.module ?? null,
       moduleProgress: activeProgress
@@ -356,13 +417,10 @@ export class ClassCurriculumService {
       nextLesson,
       lastDeliveredLesson: lastDelivered,
       lessons: lessonItems,
-      tutorHandouts: tutorPlans.map((p) => ({
-        id: p.id,
-        title: p.title,
-        handoutMarkdown: p.studentHandoutMarkdown,
-        publishedAt: p.materialPublishedAt,
-        curriculumLesson: p.curriculumLesson,
-      })),
+      lessonFormativeSummary: formativeSummary,
+      moduleFiles,
+      tutorHandouts,
+      tutorLessonMaterials: tutorLessonMaterials.filter(Boolean),
     };
   }
 

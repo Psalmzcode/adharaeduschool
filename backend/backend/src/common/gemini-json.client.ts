@@ -163,6 +163,76 @@ export async function geminiGenerate(
   );
 }
 
+export type GeminiContentPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+
+function toApiParts(parts: GeminiContentPart[]) {
+  return parts.map((p) => {
+    if ('text' in p) return { text: p.text };
+    return { inline_data: { mime_type: p.inlineData.mimeType, data: p.inlineData.data } };
+  });
+}
+
+/** Multimodal generateContent — images, PDFs, etc. */
+export async function geminiGenerateMultimodal(
+  config: ConfigService,
+  parts: GeminiContentPart[],
+  opts?: GeminiGenerateOpts,
+): Promise<{ text: string; modelUsed: string }> {
+  const key = geminiKey(config);
+  const modelsToTry = await resolveModelsToTry(config, opts);
+  const mimeType = opts?.responseMimeType ?? 'text/plain';
+
+  const generationConfig: Record<string, unknown> = {
+    temperature: typeof opts?.temperature === 'number' ? opts.temperature : 0.25,
+  };
+  if (mimeType === 'application/json') {
+    generationConfig.responseMimeType = 'application/json';
+  }
+  if (typeof opts?.maxOutputTokens === 'number' && opts.maxOutputTokens > 0) {
+    generationConfig.maxOutputTokens = opts.maxOutputTokens;
+  }
+
+  const body = JSON.stringify({
+    generationConfig,
+    contents: [{ role: 'user', parts: toApiParts(parts) }],
+  });
+
+  let lastErr: any = null;
+  for (let mi = 0; mi < modelsToTry.length; mi++) {
+    const modelName = modelsToTry[mi];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${encodeURIComponent(key)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new BadRequestException('Gemini returned empty vision response');
+        return { text: String(text).trim(), modelUsed: modelName };
+      }
+
+      const msg = data?.error?.message || 'Gemini request failed';
+      lastErr = { status: res.status, msg, modelName };
+      if (!isRetryableGeminiError(res.status, msg)) {
+        break;
+      }
+      const delay = attempt === 0 ? 800 : attempt === 1 ? 1600 : 3000;
+      await sleep(delay);
+    }
+  }
+
+  throw new BadRequestException(
+    lastErr?.msg
+      ? `Gemini vision failed (last model ${lastErr.modelName}): ${lastErr.msg}`
+      : 'Gemini vision request failed after retries',
+  );
+}
+
 /** Plain-text / Markdown generation (long-form lesson handouts, teacher guides). */
 export async function geminiGenerateText(
   config: ConfigService,

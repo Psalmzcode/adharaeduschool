@@ -77,6 +77,39 @@ export class ClassAssignmentsController {
     return this.service.grade(id, score, feedback, { userId: req.user.sub, role: req.user.role });
   }
 
+  @Post('submissions/:id/ai-grade')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  aiGrade(@Param('id') id: string, @Request() req) {
+    return this.service.proposeAiGrade(id, req.user.sub);
+  }
+
+  @Get('submissions/:id/grading-preview')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  gradingPreview(@Param('id') id: string, @Request() req) {
+    return this.service.getGradingPreview(id, req.user.sub);
+  }
+
+  @Patch('submissions/:id/approve-ai-grade')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR', 'SCHOOL_ADMIN')
+  approveAiGrade(@Param('id') id: string, @Request() req, @Body() body: any) {
+    return this.service.approveAiGrade(
+      id,
+      req.user.sub,
+      { score: body?.score != null ? Number(body.score) : undefined, feedback: body?.feedback },
+      { userId: req.user.sub, role: req.user.role },
+    );
+  }
+
+  @Get('ai-review-queue')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR')
+  aiReviewQueue(@Request() req) {
+    return this.service.listAiReviewQueue(req.user.sub);
+  }
+
   @Patch(':id')
   @UseGuards(RolesGuard)
   @Roles('TUTOR')

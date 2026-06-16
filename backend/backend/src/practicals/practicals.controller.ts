@@ -38,8 +38,8 @@ export class PracticalsController {
   @Get('tasks/:id/submissions')
   @UseGuards(RolesGuard)
   @Roles('TUTOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN')
-  submissions(@Param('id') id: string) {
-    return this.service.listSubmissions(id);
+  submissions(@Param('id') id: string, @Request() req) {
+    return this.service.listSubmissions(id, req.user.sub, req.user.role);
   }
 
   @Post('tasks')
@@ -82,6 +82,13 @@ export class PracticalsController {
   @Roles('TUTOR')
   aiGrade(@Param('id') id: string, @Request() req) {
     return this.service.proposeAiGrade(id, req.user.sub);
+  }
+
+  @Get('submissions/:id/grading-preview')
+  @UseGuards(RolesGuard)
+  @Roles('TUTOR', 'SCHOOL_ADMIN')
+  gradingPreview(@Param('id') id: string, @Request() req) {
+    return this.service.getGradingPreview(id, req.user.sub, req.user.role);
   }
 
   @Patch('submissions/:id/approve-ai-grade')
